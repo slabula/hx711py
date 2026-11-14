@@ -80,15 +80,18 @@ class HX711:
         self._filter = None
 
     def set_filter(self, new_filter):
-        self._filter = new_filter
-        
+        with self._read_lock:
+            self._filter = new_filter
+
     def set_m(self, m):
-        self._m = m
-        self._reset_filter()
+        with self._read_lock:
+            self._m = m
+            self._reset_filter()
 
     def set_c(self, c):
-        self._c = c
-        self._reset_filter()
+        with self._read_lock:
+            self._c = c
+            self._reset_filter()
 
     def _reset_filter(self):
         if self._filter is None:
