@@ -87,14 +87,14 @@ import time
 # mode.  After a reset or power-down event, input selection is default to
 # Channel A with a gain of 128.
 
-# def twos_complement_24bit_to_int(input_value):
-#     return -(input_value & 0x800000) + (input_value & 0x7fffff)
-
 def int_to_twos_complement_24bit(int_value):
-    if int_value < 0:
-        raise ValueError("NOT HANDLED NEGATIVE, YET")
+    """Convert a signed value to a saturated 24-bit two's complement value."""
+    if int_value < -0x800000:
+        int_value = -0x800000
+    elif int_value > 0x7fffff:
+        int_value = 0x7fffff
 
-    return min(int_value, 0x7fffff)
+    return int_value & 0xffffff
 
 
 class FakeHx711:
@@ -102,7 +102,7 @@ class FakeHx711:
     attempting to use other settings will raise an exception
     """
 
-    # Sample rate is 80 Hz --> period 0.0125ms
+    # Sample rate is 80 Hz --> period 0.0125s
     SAMPLE_PERIOD_SECONDS = 0.0125
 
     # Holding PD_SCK pin high for 60us will turn it off.
