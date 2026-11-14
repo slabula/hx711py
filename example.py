@@ -1,6 +1,5 @@
 import sys
-from hx711 import HX711
-from hx711.sample_filter import SampleFilter
+from hx711 import HX711, SampleFilter
 
 def cleanAndExit():
     print("Cleaning...")

@@ -18,8 +18,9 @@ class SampleFilter:
         self._cutoff_frequency_hz = cutoff_frequency_hz
         self._median_window = median_window
         period = 1.0 / sample_frequency_hz
-        tau = 1.0 / (2 * math.pi * cutoff_frequency_hz)
-        self._alpha = period / (tau + period)
+        self._alpha = 1.0 - math.exp(
+            -2.0 * math.pi * cutoff_frequency_hz * period
+        )
         self._rolling_window = deque(maxlen=median_window)
         self._moving_average = None
 

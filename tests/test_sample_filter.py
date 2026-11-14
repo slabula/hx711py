@@ -5,12 +5,13 @@ import pytest
 from hx711.sample_filter import SampleFilter
 
 
-def test_alpha_matches_first_order_low_pass():
+def test_alpha_uses_exponential_cutoff_mapping():
     sample_frequency_hz = 80.0
     cutoff_frequency_hz = 10.0
     period = 1.0 / sample_frequency_hz
-    tau = 1.0 / (2 * math.pi * cutoff_frequency_hz)
-    expected_alpha = period / (tau + period)
+    expected_alpha = 1.0 - math.exp(
+        -2.0 * math.pi * cutoff_frequency_hz * period
+    )
 
     sample_filter = SampleFilter(sample_frequency_hz, cutoff_frequency_hz)
 

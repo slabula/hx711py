@@ -26,9 +26,10 @@ I'm currently trying to improve this version. It's actually working, I'd use `hx
 3. [Running the tests](#running-the-tests)
 4. [Measuring the sample rate](#measuring-the-sample-rate)
 5. [Calibrating](#calibrating)
-6. [Serving readings over the network](#serving-readings-over-the-network)
-7. [About using the two channels of one breakout board](#about-using-the-two-channels-of-one-breakout-board)
-8. [Changelog](#changelog)
+6. [Filtering readings](#filtering-readings)
+7. [Serving readings over the network](#serving-readings-over-the-network)
+8. [About using the two channels of one breakout board](#about-using-the-two-channels-of-one-breakout-board)
+9. [Changelog](#changelog)
 
 ## Files description
 
@@ -36,6 +37,7 @@ The library lives in the `hx711/` package. The utility scripts sit at the top le
 
 File descriptions:
 - `hx711/core.py`: The main implementation. `read_word()` returns raw signed 24-bit values; `set_m()`/`set_c()` configure `read_weight()` to return `m * raw + c`.
+- `hx711/sample_filter.py`: Optional median + exponential-moving-average filter for `read_weight()` readings.
 - `example.py`: Example of how to use `hx711/core.py` to print calibrated weight readings.
 - `example_emulator.py`: Example that runs `hx711/core.py` against the fake GPIO/HX711, so it works without a Raspberry Pi.
 - `calibrate_sensor.py`: Interactive utility that measures known loads and reports the `m` and `c` values for `set_m()`/`set_c()`.
@@ -98,6 +100,34 @@ weight = hx.read_weight()
 
 `read_weight()` returns `m * raw + c`, or `None` on a read timeout. Run
 `python calibrate_sensor.py --help` for pin, sample-count, and gain options.
+
+### Filtering readings
+
+`SampleFilter` smooths calibrated readings. It takes the median of the last few
+samples to reject spikes, then applies a first-order low-pass filter:
+
+```python
+from hx711 import HX711, SampleFilter
+
+hx = HX711(5, 6)
+hx.set_m(m)
+hx.set_c(c)
+hx.set_filter(SampleFilter(80.0, 10.0))
+weight = hx.read_weight()
+```
+
+The first argument is the actual sample rate in Hz and the second is the desired
+cutoff in Hz. `median_window` defaults to 5. Make sure the sample rate matches
+your setup: the HX711 runs at 10 SPS by default or 80 SPS with RATE=1, and
+`measure_sample_rate.py` reports the rate you actually achieve.
+
+The smoothing coefficient is `alpha = 1 - math.exp(-2 * math.pi * cutoff * dt)`.
+This exponential mapping gives a cutoff much closer to the requested one than
+the backward-Euler approximation. It can still drift slightly when the cutoff is
+a large fraction of the sample rate.
+
+`SampleFilter.reset()` clears the filter state; `set_m()` and `set_c()` also
+reset an attached filter.
 
 ### Serving readings over the network
 
@@ -180,6 +210,7 @@ https://cdn.sparkfun.com/datasheets/Sensors/ForceFlex/hx711_english.pdf
 - `set_channel_gain()` now validates its argument and raises `ValueError` for invalid values.
 - Added `set_m()`, `set_c()`, and `read_weight()` for calibrated weight readings.
 - Added `calibrate_sensor.py` to fit `m` and `c` from known loads.
+- Added `hx711/sample_filter.py` with an optional median + EMA filter using an exponential alpha mapping, exported as `SampleFilter`.
 - Added `hx711_server.py` and `example_client.py` for serving readings over HTTP.
 - Added `measure_sample_rate.py` and a `pytest` test suite.
 - `RPi.GPIO` is now an optional `rpi` extra, so the package installs off-Pi.
