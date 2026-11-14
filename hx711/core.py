@@ -125,16 +125,17 @@ class HX711:
         return self._gain
 
     def read_weight(self, timeout_seconds=0.5):
-        raw_sample = self.read_word(timeout_seconds)
+        with self._read_lock:
+            raw_sample = self.read_word(timeout_seconds)
 
-        if raw_sample is None:
-            return None
+            if raw_sample is None:
+                return None
 
-        real_sample = (raw_sample * self._m) + self._c
+            real_sample = (raw_sample * self._m) + self._c
 
-        if self._filter is None:
-            return real_sample
-        else:
+            if self._filter is None:
+                return real_sample
+
             return self._filter.sample(real_sample)
     
     def read_word(self, timeout_seconds=0.5):

@@ -1,3 +1,5 @@
+import threading
+
 import pytest
 
 from hx711.core import HX711, twos_complement_24bit_to_int
@@ -129,6 +131,42 @@ def test_read_weight_returns_none_on_timeout():
     hx.set_c(1.0)
 
     assert hx.read_weight(timeout_seconds=0.01) is None
+
+
+class TrackingRLock:
+    def __init__(self):
+        self._lock = threading.RLock()
+        self.depth = 0
+
+    def __enter__(self):
+        self._lock.acquire()
+        self.depth += 1
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        self.depth -= 1
+        self._lock.release()
+
+
+class LockCheckingFilter:
+    def __init__(self, lock):
+        self._lock = lock
+        self.lock_was_held = None
+
+    def sample(self, value):
+        self.lock_was_held = self._lock.depth > 0
+        return value * 2
+
+
+def test_read_weight_filters_while_holding_read_lock():
+    hx = HX711(5, 6, gpio_module=RecordingGpio(sample=100))
+    lock = TrackingRLock()
+    hx._read_lock = lock
+    sample_filter = LockCheckingFilter(lock)
+    hx.set_filter(sample_filter)
+
+    assert hx.read_weight() == 200
+    assert sample_filter.lock_was_held
 
 
 @pytest.mark.parametrize(
