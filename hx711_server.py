@@ -23,6 +23,8 @@ DEFAULT_DOUT_PIN = 5
 DEFAULT_PD_SCK_PIN = 6
 DEFAULT_FILTER_SAMPLE_RATE_HZ = 80.0
 DEFAULT_FILTER_MEDIAN_WINDOW = 5
+READ_TIMEOUT_SECONDS = 0.5
+READER_JOIN_TIMEOUT_SECONDS = 1.0
 
 GAIN_ENUMS = {
     128: HX711.CH_A_GAIN_128,
@@ -47,11 +49,21 @@ class LatestReading:
             return self._value
 
 
-def read_forever(hx, reading, unit):
-    while True:
-        weight = hx.read_weight()
+def read_forever(hx, reading, unit, stop_event):
+    while not stop_event.is_set():
+        weight = hx.read_weight(timeout_seconds=READ_TIMEOUT_SECONDS)
         if weight is not None:
             reading.set({"ts": time.time(), "weight": weight, "unit": unit})
+
+
+def stop_reader_and_cleanup(read_thread, stop_event, hx):
+    stop_event.set()
+    read_thread.join(timeout=READER_JOIN_TIMEOUT_SECONDS)
+    if read_thread.is_alive():
+        return False
+
+    hx.cleanup()
+    return True
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -194,9 +206,13 @@ def main():
     reading = LatestReading()
     Handler.reading = reading
 
-    threading.Thread(
-        target=read_forever, args=(hx, reading, args.unit), daemon=True
-    ).start()
+    stop_event = threading.Event()
+    read_thread = threading.Thread(
+        target=read_forever,
+        args=(hx, reading, args.unit, stop_event),
+        daemon=True,
+    )
+    read_thread.start()
 
     server = ThreadingHTTPServer((args.host, args.port), Handler)
     print("Serving http://{}:{}/weight".format(args.host, args.port))
@@ -207,7 +223,7 @@ def main():
         pass
     finally:
         server.server_close()
-        hx.cleanup()
+        stop_reader_and_cleanup(read_thread, stop_event, hx)
 
 
 if __name__ == "__main__":

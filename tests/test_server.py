@@ -2,7 +2,14 @@ import threading
 
 import pytest
 
-from hx711_server import LatestReading, build_sample_filter, parse_args
+from hx711_server import (
+    LatestReading,
+    READER_JOIN_TIMEOUT_SECONDS,
+    build_sample_filter,
+    parse_args,
+    read_forever,
+    stop_reader_and_cleanup,
+)
 
 
 def test_latest_reading_starts_empty():
@@ -58,7 +65,7 @@ def test_latest_reading_is_thread_safe():
 def test_filter_is_disabled_by_default():
     args = parse_args([])
 
-    assert args.filter_sample_rate == 10.0
+    assert args.filter_sample_rate == 80.0
     assert args.filter_median_window == 5
     assert build_sample_filter(args) is None
 
@@ -95,3 +102,87 @@ def test_invalid_filter_settings_raise_value_error(argv, match):
 
     with pytest.raises(ValueError, match=match):
         build_sample_filter(args)
+
+
+class StopAfterOneRead:
+    def __init__(self, stop_event):
+        self.stop_event = stop_event
+        self.reads = 0
+
+    def read_weight(self, timeout_seconds=0.5):
+        self.reads += 1
+        if self.reads > 1:
+            raise AssertionError("read_forever ignored stop event")
+        self.stop_event.set()
+        return 12.5
+
+
+class FakeReaderThread:
+    def __init__(self, alive_after_join):
+        self.alive = True
+        self.alive_after_join = alive_after_join
+        self.join_timeout = None
+
+    def join(self, timeout=None):
+        self.join_timeout = timeout
+        self.alive = self.alive_after_join
+
+    def is_alive(self):
+        return self.alive
+
+
+class CleanupRecorder:
+    def __init__(self):
+        self.cleaned = False
+
+    def cleanup(self):
+        self.cleaned = True
+
+
+def test_read_forever_stops_after_stop_event_is_set():
+    stop_event = threading.Event()
+    hx = StopAfterOneRead(stop_event)
+    reading = LatestReading()
+
+    read_forever(hx, reading, "kg", stop_event)
+
+    assert hx.reads == 1
+    assert reading.get()["weight"] == 12.5
+    assert reading.get()["unit"] == "kg"
+
+
+def test_read_forever_does_not_read_when_already_stopped():
+    stop_event = threading.Event()
+    stop_event.set()
+    hx = StopAfterOneRead(stop_event)
+    reading = LatestReading()
+
+    read_forever(hx, reading, "kg", stop_event)
+
+    assert hx.reads == 0
+    assert reading.get() is None
+
+
+def test_stop_reader_and_cleanup_joins_before_cleanup():
+    stop_event = threading.Event()
+    read_thread = FakeReaderThread(alive_after_join=False)
+    hx = CleanupRecorder()
+
+    stopped = stop_reader_and_cleanup(read_thread, stop_event, hx)
+
+    assert stopped is True
+    assert stop_event.is_set()
+    assert read_thread.join_timeout == READER_JOIN_TIMEOUT_SECONDS
+    assert hx.cleaned is True
+
+
+def test_stop_reader_and_cleanup_skips_cleanup_if_reader_is_alive():
+    stop_event = threading.Event()
+    read_thread = FakeReaderThread(alive_after_join=True)
+    hx = CleanupRecorder()
+
+    stopped = stop_reader_and_cleanup(read_thread, stop_event, hx)
+
+    assert stopped is False
+    assert stop_event.is_set()
+    assert hx.cleaned is False

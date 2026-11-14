@@ -159,9 +159,10 @@ To smooth the readings, enable the optional filter:
 python hx711_server.py --m ... --c ... --filter-cutoff 5 --filter-sample-rate 80
 ```
 
-Set `--filter-sample-rate` to the actual read rate (10 SPS by default, 80 with
-RATE=1; `measure_sample_rate.py` can check). `--filter-median-window` defaults to
-5. Without `--filter-cutoff`, readings are unfiltered.
+`--filter-sample-rate` defaults to 80 Hz. Set it to the actual read rate for
+your hardware (10 SPS by default, 80 with RATE=1; `measure_sample_rate.py` can
+check). `--filter-median-window` defaults to 5. Without `--filter-cutoff`,
+readings are unfiltered.
 
 ### Deprecated Version
 
@@ -223,6 +224,7 @@ https://cdn.sparkfun.com/datasheets/Sensors/ForceFlex/hx711_english.pdf
 - Added `hx711/sample_filter.py` with an optional median + EMA filter using an exponential alpha mapping, exported as `SampleFilter`.
 - Added `hx711_server.py` and `example_client.py` for serving readings over HTTP.
 - Added optional `SampleFilter` settings to `hx711_server.py`: `--filter-cutoff`, `--filter-sample-rate`, and `--filter-median-window`.
+- `hx711_server.py` now stops its reader thread before releasing GPIO on shutdown.
 - Added `measure_sample_rate.py` and a `pytest` test suite.
 - `RPi.GPIO` is now an optional `rpi` extra, so the package installs off-Pi.
 - README updated to match the current API.
