@@ -41,7 +41,7 @@ File descriptions:
 - `example.py`: Example of how to use `hx711/core.py` to print calibrated weight readings.
 - `example_emulator.py`: Example that runs `hx711/core.py` against the fake GPIO/HX711, so it works without a Raspberry Pi.
 - `calibrate_sensor.py`: Interactive utility that measures known loads and reports the `m` and `c` values for `set_m()`/`set_c()`.
-- `hx711_server.py`: HTTP server that publishes the latest calibrated reading as JSON.
+- `hx711_server.py`: HTTP server that publishes the latest calibrated reading as JSON; can apply `SampleFilter`.
 - `example_client.py`: Example client that polls the server.
 - `hx711/v0_5_1.py`: **Deprecated** — superseded by `hx711/core.py`. The previous version, which aimed at allowing 10 readings per second. Kept for backwards compatibility.
 - `example_hx711v0_5_1.py`: Example of how to use the deprecated `hx711/v0_5_1.py`.
@@ -153,6 +153,16 @@ python example_client.py --url http://raspberrypi.local:8080/weight
 `ts` is UTC epoch seconds. The endpoint has no authentication, so only expose it
 on a trusted network. Run either script with `--help` for all options.
 
+To smooth the readings, enable the optional filter:
+
+```bash
+python hx711_server.py --m ... --c ... --filter-cutoff 5 --filter-sample-rate 80
+```
+
+Set `--filter-sample-rate` to the actual read rate (10 SPS by default, 80 with
+RATE=1; `measure_sample_rate.py` can check). `--filter-median-window` defaults to
+5. Without `--filter-cutoff`, readings are unfiltered.
+
 ### Deprecated Version
 
 `hx711/v0_5_1.py` is deprecated in favour of `hx711/core.py` and is kept for
@@ -212,6 +222,7 @@ https://cdn.sparkfun.com/datasheets/Sensors/ForceFlex/hx711_english.pdf
 - Added `calibrate_sensor.py` to fit `m` and `c` from known loads.
 - Added `hx711/sample_filter.py` with an optional median + EMA filter using an exponential alpha mapping, exported as `SampleFilter`.
 - Added `hx711_server.py` and `example_client.py` for serving readings over HTTP.
+- Added optional `SampleFilter` settings to `hx711_server.py`: `--filter-cutoff`, `--filter-sample-rate`, and `--filter-median-window`.
 - Added `measure_sample_rate.py` and a `pytest` test suite.
 - `RPi.GPIO` is now an optional `rpi` extra, so the package installs off-Pi.
 - README updated to match the current API.

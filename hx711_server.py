@@ -14,13 +14,15 @@ import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from socketserver import ThreadingMixIn
 
-from hx711 import HX711
+from hx711 import HX711, SampleFilter
 
 
 DEFAULT_HOST = "0.0.0.0"
 DEFAULT_PORT = 8080
 DEFAULT_DOUT_PIN = 5
 DEFAULT_PD_SCK_PIN = 6
+DEFAULT_FILTER_SAMPLE_RATE_HZ = 80.0
+DEFAULT_FILTER_MEDIAN_WINDOW = 5
 
 GAIN_ENUMS = {
     128: HX711.CH_A_GAIN_128,
@@ -85,7 +87,7 @@ def _handle_sigterm(signum, frame):
     raise KeyboardInterrupt
 
 
-def parse_args():
+def parse_args(argv=None):
     parser = argparse.ArgumentParser(
         description="Serve the latest HX711 reading over HTTP as JSON."
     )
@@ -134,11 +136,48 @@ def parse_args():
         default="units",
         help="unit label reported to clients (default: %(default)s)",
     )
-    return parser.parse_args()
+    parser.add_argument(
+        "--filter-cutoff",
+        type=float,
+        metavar="HZ",
+        help="enable the low-pass filter with this cutoff in Hz (default: disabled)",
+    )
+    parser.add_argument(
+        "--filter-sample-rate",
+        type=float,
+        default=DEFAULT_FILTER_SAMPLE_RATE_HZ,
+        metavar="HZ",
+        help="sample rate for filtering in Hz, used with --filter-cutoff (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--filter-median-window",
+        type=int,
+        default=DEFAULT_FILTER_MEDIAN_WINDOW,
+        metavar="N",
+        help="median window size, used with --filter-cutoff (default: %(default)s)",
+    )
+    return parser.parse_args(argv)
+
+
+def build_sample_filter(args):
+    if args.filter_cutoff is None:
+        return None
+
+    return SampleFilter(
+        sample_frequency_hz=args.filter_sample_rate,
+        cutoff_frequency_hz=args.filter_cutoff,
+        median_window=args.filter_median_window,
+    )
 
 
 def main():
     args = parse_args()
+
+    try:
+        sample_filter = build_sample_filter(args)
+    except ValueError as exc:
+        raise SystemExit("error: {}".format(exc))
+
     hx = HX711(args.dout, args.pd_sck)
 
     if args.m is not None:
@@ -148,6 +187,9 @@ def main():
 
     hx.reset()
     hx.set_channel_gain(GAIN_ENUMS[args.gain])
+
+    if sample_filter is not None:
+        hx.set_filter(sample_filter)
 
     reading = LatestReading()
     Handler.reading = reading

@@ -1,6 +1,8 @@
 import threading
 
-from hx711_server import LatestReading
+import pytest
+
+from hx711_server import LatestReading, build_sample_filter, parse_args
 
 
 def test_latest_reading_starts_empty():
@@ -51,3 +53,45 @@ def test_latest_reading_is_thread_safe():
         thread.join()
 
     assert errors == []
+
+
+def test_filter_is_disabled_by_default():
+    args = parse_args([])
+
+    assert args.filter_sample_rate == 10.0
+    assert args.filter_median_window == 5
+    assert build_sample_filter(args) is None
+
+
+def test_filter_settings_are_parsed():
+    args = parse_args(
+        [
+            "--filter-cutoff",
+            "5.5",
+            "--filter-sample-rate",
+            "80",
+            "--filter-median-window",
+            "3",
+        ]
+    )
+
+    sample_filter = build_sample_filter(args)
+
+    assert sample_filter._sample_frequency_hz == 80.0
+    assert sample_filter._cutoff_frequency_hz == 5.5
+    assert sample_filter._median_window == 3
+
+
+@pytest.mark.parametrize(
+    "argv, match",
+    [
+        (["--filter-cutoff", "0"], "cutoff_frequency_hz"),
+        (["--filter-cutoff", "5", "--filter-sample-rate", "0"], "sample_frequency_hz"),
+        (["--filter-cutoff", "5", "--filter-median-window", "0"], "median_window"),
+    ],
+)
+def test_invalid_filter_settings_raise_value_error(argv, match):
+    args = parse_args(argv)
+
+    with pytest.raises(ValueError, match=match):
+        build_sample_filter(args)
