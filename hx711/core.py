@@ -12,7 +12,13 @@ except ModuleNotFoundError:
     print("No RPi package, simulating GPIO connected to fake HX711.")
     FAKE_HX711 = FakeHx711()
 
-    FAKE_HX711.inject_raw_samples([2000] * 100)    # 0kg
+    m = 6.755387341782463e-05
+    c = -0.03626955667860976
+
+    for x in range(100):
+        FAKE_HX711.inject_float_samples([float(x)], m, c)
+    
+    #FAKE_HX711.inject_raw_samples([2000] * 100)    # 0kg
     FAKE_HX711.inject_raw_samples([140900] * 100)  # 10kg
     FAKE_HX711.inject_raw_samples([696500] * 100)  # 50kg
     
@@ -71,12 +77,27 @@ class HX711:
         self._m = 1.0
         self._c = 0.0
 
+        self._filter = None
+
+    def set_filter(self, new_filter):
+        self._filter = new_filter
+        
     def set_m(self, m):
         self._m = m
+        self._reset_filter()
 
     def set_c(self, c):
         self._c = c
-        
+        self._reset_filter()
+
+    def _reset_filter(self):
+        if self._filter is None:
+            return
+
+        reset = getattr(self._filter, "reset", None)
+        if reset is not None:
+            reset()
+
     def is_ready(self):
         return self._gpio.input(self._dout) == 0
 
@@ -109,7 +130,12 @@ class HX711:
         if raw_sample is None:
             return None
 
-        return (raw_sample * self._m) + self._c
+        real_sample = (raw_sample * self._m) + self._c
+
+        if self._filter is None:
+            return real_sample
+        else:
+            return self._filter.sample(real_sample)
     
     def read_word(self, timeout_seconds=0.5):
         # Wait for and get the Read Lock, in case another thread is already

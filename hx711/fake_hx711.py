@@ -87,6 +87,16 @@ import time
 # mode.  After a reset or power-down event, input selection is default to
 # Channel A with a gain of 128.
 
+# def twos_complement_24bit_to_int(input_value):
+#     return -(input_value & 0x800000) + (input_value & 0x7fffff)
+
+def int_to_twos_complement_24bit(int_value):
+    if int_value < 0:
+        raise ValueError("NOT HANDLED NEGATIVE, YET")
+
+    return min(int_value, 0x7fffff)
+
+
 class FakeHx711:
     """Simulates a HX711, currently only emulates channel A: Gain 128,
     attempting to use other settings will raise an exception
@@ -97,9 +107,6 @@ class FakeHx711:
 
     # Holding PD_SCK pin high for 60us will turn it off.
     POWER_OFF_PERIOD_SECONDS = 0.00006
-
-    REFERENCE_A_UNIT = 13.819
-    REFERENCE_B_UNIT = 13.819
 
     def __init__(self, value_list=None):
         self._powered_down = True
@@ -115,10 +122,12 @@ class FakeHx711:
         self._sample_ready = False
         self._prev_clock_count = None
 
-    def inject_float_samples(self, sample_list):
+    def inject_float_samples(self, sample_list, m, c):
         """Inject a list of real samples to be output by the HX711 emulator."""
-        for sample in sample_list:
-            self._pending_value_list.append(int(sample * self.REFERENCE_A_UNIT))
+        for real_sample in sample_list:
+            raw_int = int((real_sample - c) / m)
+            twos_sample = int_to_twos_complement_24bit(raw_int)
+            self._pending_value_list.append(twos_sample)
 
     def inject_raw_samples(self, sample_list):
         self._pending_value_list += sample_list
@@ -135,8 +144,13 @@ class FakeHx711:
                 # print("Powering down.")
                 self._powered_down = True
                 self._power_down_deadline_time = None
+                self._clock_posedge_count = 0
+                self._clock_negedge_count = 0
 
-        if time.monotonic() >= self._next_sample_due_time:
+        if (
+            not self._powered_down
+            and time.monotonic() >= self._next_sample_due_time
+        ):
             self.next_sample()
 
         if pos_edge:

@@ -1,6 +1,6 @@
 import sys
 from hx711 import HX711
-
+from hx711.sample_filter import SampleFilter
 
 def cleanAndExit():
     print("Cleaning...")
@@ -18,6 +18,8 @@ hx.reset()
 
 hx.set_m(6.755387341782463e-05)
 hx.set_c(-0.03626955667860976)
+
+hx.set_filter(SampleFilter(77.0, 10.0))
 
 # read_word() returns a signed 24-bit raw reading, or None on timeout.
 while True:
