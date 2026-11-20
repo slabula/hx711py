@@ -7,6 +7,7 @@ setup(
     packages=find_packages(include=['hx711', 'hx711.*']),
     extras_require={
         'rpi': ['RPi.GPIO'],
+        'pigpio': ['pigpio'],
         'dev': ['pytest'],
     },
     python_requires='>=3',

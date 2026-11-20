@@ -1,7 +1,7 @@
 #! /usr/bin/python3
 
 """
-Poll an hx711_server.py instance and print timestamp/weight values.
+Poll an hx711_server.py instance and print timestamp/weight/sample-rate values.
 """
 
 import argparse
@@ -47,6 +47,50 @@ def fetch(url, timeout):
         response.close()
 
 
+def calculate_sample_rate(samples):
+    if not samples:
+        return None
+
+    unique_samples = []
+    seen_values = set()
+    for sample in samples:
+        value = sample.get("weight")
+        if value in seen_values:
+            continue
+        seen_values.add(value)
+        unique_samples.append(sample)
+
+    if len(unique_samples) < 2:
+        return None
+
+    first = unique_samples[0].get("ts")
+    last = unique_samples[-1].get("ts")
+    if first is None or last is None or last <= first:
+        return None
+
+    return len(unique_samples) / (last - first)
+
+
+def format_reading(reading):
+    when = datetime.datetime.fromtimestamp(reading["ts"])
+    text = "{}  {:.3f}".format(
+        when.strftime("%Y-%m-%d %H:%M:%S"),
+        reading["weight"],
+    )
+
+    unit = reading.get("unit")
+    if unit:
+        text += " {}".format(unit)
+
+    sample_rate = calculate_sample_rate(reading.get("samples"))
+    if sample_rate is None:
+        text += "  rate n/a"
+    else:
+        text += "  rate {:.2f} Hz".format(sample_rate)
+
+    return text
+
+
 def main():
     args = parse_args()
 
@@ -54,14 +98,7 @@ def main():
         while True:
             try:
                 reading = fetch(args.url, args.timeout)
-                when = datetime.datetime.fromtimestamp(reading["ts"])
-                print(
-                    "{}  {:.3f} {}".format(
-                        when.strftime("%Y-%m-%d %H:%M:%S"),
-                        reading["weight"],
-                        reading.get("unit", ""),
-                    ).rstrip()
-                )
+                print(format_reading(reading))
             except urllib.error.HTTPError as exc:
                 if exc.code == 503:
                     print("Waiting for the first reading...")

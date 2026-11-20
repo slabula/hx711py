@@ -2,9 +2,12 @@ import threading
 
 import pytest
 
+from hx711 import HX711
 from hx711_server import (
-    LatestReading,
+    HISTORY_SIZE,
     READER_JOIN_TIMEOUT_SECONDS,
+    ReadingHistory,
+    build_hx711,
     build_sample_filter,
     parse_args,
     read_forever,
@@ -12,29 +15,51 @@ from hx711_server import (
 )
 
 
-def test_latest_reading_starts_empty():
-    assert LatestReading().get() is None
+def test_reading_history_starts_empty():
+    assert ReadingHistory().get() is None
 
 
-def test_latest_reading_returns_most_recent_value():
-    reading = LatestReading()
+def test_reading_history_returns_latest_value_and_all_samples():
+    reading = ReadingHistory()
 
     reading.set({"ts": 1.0, "weight": 2.0, "unit": "kg"})
     reading.set({"ts": 3.0, "weight": 4.0, "unit": "kg"})
 
-    assert reading.get() == {"ts": 3.0, "weight": 4.0, "unit": "kg"}
+    assert reading.get() == {
+        "ts": 3.0,
+        "weight": 4.0,
+        "unit": "kg",
+        "samples": [
+            {"ts": 1.0, "weight": 2.0, "unit": "kg"},
+            {"ts": 3.0, "weight": 4.0, "unit": "kg"},
+        ],
+    }
 
 
-def test_latest_reading_can_be_reset_to_none():
-    reading = LatestReading()
+def test_reading_history_keeps_only_the_most_recent_samples():
+    reading = ReadingHistory()
+
+    for seq in range(HISTORY_SIZE + 10):
+        reading.set({"seq": seq})
+
+    payload = reading.get()
+
+    assert len(payload["samples"]) == HISTORY_SIZE
+    assert payload["seq"] == HISTORY_SIZE + 9
+    assert payload["samples"][0]["seq"] == 10
+    assert payload["samples"][-1]["seq"] == HISTORY_SIZE + 9
+
+
+def test_reading_history_can_be_reset_to_none():
+    reading = ReadingHistory()
     reading.set({"weight": 2.0})
     reading.set(None)
 
     assert reading.get() is None
 
 
-def test_latest_reading_is_thread_safe():
-    reading = LatestReading()
+def test_reading_history_is_thread_safe():
+    reading = ReadingHistory()
     errors = []
 
     def writer():
@@ -48,7 +73,9 @@ def test_latest_reading_is_thread_safe():
         try:
             for _ in range(1000):
                 value = reading.get()
-                if value is not None and "seq" not in value:
+                if value is not None and (
+                    "seq" not in value or "samples" not in value
+                ):
                     raise AssertionError(value)
         except Exception as exc:
             errors.append(exc)
@@ -56,10 +83,10 @@ def test_latest_reading_is_thread_safe():
     threads = [threading.Thread(target=writer), threading.Thread(target=reader)]
     for thread in threads:
         thread.start()
-    for thread in threads:
         thread.join()
 
     assert errors == []
+
 
 
 def test_filter_is_disabled_by_default():
@@ -67,7 +94,23 @@ def test_filter_is_disabled_by_default():
 
     assert args.filter_sample_rate == 80.0
     assert args.filter_median_window == 5
+    assert args.gpio == "rpi"
     assert build_sample_filter(args) is None
+
+
+def test_gpio_backend_is_parsed():
+    args = parse_args(["--gpio", "pigpio"])
+
+    assert args.gpio == "pigpio"
+
+
+def test_build_hx711_uses_rpi_backend_by_default():
+    hx = build_hx711(parse_args(["--dout", "5", "--pd-sck", "6"]))
+
+    assert isinstance(hx, HX711)
+    assert hx._dout == 5
+    assert hx._pd_sck == 6
+    hx.cleanup()
 
 
 def test_filter_settings_are_parsed():
@@ -142,7 +185,7 @@ class CleanupRecorder:
 def test_read_forever_stops_after_stop_event_is_set():
     stop_event = threading.Event()
     hx = StopAfterOneRead(stop_event)
-    reading = LatestReading()
+    reading = ReadingHistory()
 
     read_forever(hx, reading, "kg", stop_event)
 
@@ -155,7 +198,7 @@ def test_read_forever_does_not_read_when_already_stopped():
     stop_event = threading.Event()
     stop_event.set()
     hx = StopAfterOneRead(stop_event)
-    reading = LatestReading()
+    reading = ReadingHistory()
 
     read_forever(hx, reading, "kg", stop_event)
 
