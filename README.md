@@ -21,6 +21,8 @@ The current implementation is `hx711/core.py`; `hx711/v0_5_1.py` is deprecated.
 - [Filtering](#filtering)
 - [Sample rate](#sample-rate)
 - [HTTP server](#http-server)
+- [Replay fake data from CSV](#replay-fake-data-from-csv)
+- [Browser training client](#browser-training-client)
 - [Hardware-free emulator](#hardware-free-emulator)
 - [Testing](#testing)
 - [Project layout](#project-layout)
@@ -272,6 +274,82 @@ python hx711_server.py --m 0.000018 --c -2.5 --filter-cutoff 5 --filter-sample-r
 
 Set `--filter-sample-rate` to the actual read rate for your hardware. Without
 `--filter-cutoff`, readings are unfiltered.
+
+### Replay fake data from CSV
+
+`dummy_scale_server.py` in the repository root replays a two-column
+`timestamp,weight` CSV through the same `GET /weight` payload as
+`hx711_server.py`, so you can test the browser client without hardware:
+
+```bash
+python3 dummy_scale_server.py live.csv --loop --start-delay 5
+```
+
+Point the training client at the replay server:
+
+```bash
+python3 finger_training_client.py --url http://127.0.0.1:8080/weight
+```
+
+Timestamps are scheduling marks in seconds; relative and epoch timestamps both
+work because only differences matter. Use `--speed` to compress long files.
+Add a few seconds of zero load at the start of the CSV if the session should
+begin from rest. When the file ends the last reading is held; `--loop` repeats
+it. `--start-delay` holds the first reading while clients connect and tare.
+
+| Option | Default | Description |
+| --- | --- | --- |
+| `--host` | `127.0.0.1` | Bind address |
+| `--port` | `8080` | TCP port |
+| `--unit` | `kg` | Unit label |
+| `--speed` | `1.0` | Replay speed multiplier |
+| `--loop` | off | Restart the file when it ends |
+| `--start-delay` | `0` | Hold the first reading for this many seconds |
+
+## Browser training client
+
+The repository includes a browser-based client for the auto-regulated finger
+training protocol. It polls `hx711_server.py`, runs the protocol state machine,
+stores JSON baselines and session logs, and serves a live biofeedback UI. It
+requires Python 3 and `numpy` (used for RFD regression).
+
+```bash
+python3 finger_training_client.py --url http://raspberrypi.local:8080/weight
+```
+
+Then open `http://127.0.0.1:8090/`. The first session should be a **Baseline
+Test**; normal sessions are blocked until both hands have a baseline. After
+tare, the warm-up does not start its hold countdown until the force exceeds the
+onset threshold (`max(1.5 kg, 3 * sigma)`) and reaches the target band.
+Pulling steps hide the countdown until they actually start. Warm-up ramps
+include a 10 s pause to switch hands, and cross-hand baseline pulls are preceded
+by a labelled 60 s rest. Rest countdowns show the next step, including "pull
+maximally" hints, and the Hand/Set/Rep fields preview the next operation so you
+can get set. The live UI includes a force chart with 30 s of history and
+15 s of look-ahead: upcoming target bands are drawn dashed so the next pull is
+visible during rest (and during repeater off periods). It also shows the current
+target band/center, an onset line, and ON/OFF background shading for repeater
+sets. Readiness shows each hand's MVC/RFD as a
+percentage of baseline plus the limiting metric behind a yellow/red decision.
+The **Debug** buttons force a GREEN, YELLOW or RED session and skip the
+readiness pulls; they use seed targets if no baseline exists. Data is written to
+`data/baseline.json` and `data/sessions/`.
+
+| Option | Default | Description |
+| --- | --- | --- |
+| `--url` | `http://raspberrypi.local:8080/weight` | Scale reading URL |
+| `--host` | `127.0.0.1` | Web UI bind address |
+| `--port` | `8090` | Web UI port |
+| `--data-dir` | `data` | Baseline and session directory |
+| `--poll-interval` | `0.01` | Seconds between scale polls |
+| `--timeout` | `1.0` | HTTP request timeout |
+| `--baseline-days` | `14` | Rolling baseline window |
+
+Keep the server-side filter disabled; the client applies its own
+timestamp-normalized 10 Hz filter. See
+`auto_regulated_finger_training_protocol.md` for the full protocol and
+`auto_regulated_finger_training_plan.md` for the implementation design.
+
 
 ## Hardware-free emulator
 
