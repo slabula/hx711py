@@ -301,6 +301,11 @@ Then poll it from another machine:
 python example_client.py --url http://raspberrypi.local:8080/weight
 ```
 
+The client also prints the sample rate estimated from the server's `samples`
+list. Repeated `weight` values are counted once, and the remaining unique sample
+count is divided by the timestamp span. Servers that do not provide samples
+show `rate n/a`.
+
 `GET /weight` (or `GET /`) returns:
 
 ```json
@@ -469,6 +474,8 @@ Legacy screenshots are available in the [resources](resources) directory.
   `/weight` JSON response as `samples`.
 - `measure_sample_rate.py` now supports `--legacy` to measure with the old
   `hx711.v0_5_1` polling method.
+- `example_client.py` now prints the sample rate derived from unique values in
+  the server's recent samples.
 
 ### 14/11/2026
 
