@@ -127,6 +127,12 @@ def parse_args(argv=None):
         help="PD_SCK GPIO pin (default: %(default)s)",
     )
     parser.add_argument(
+        "--gpio",
+        choices=("rpi", "pigpio"),
+        default="rpi",
+        help="GPIO backend (default: %(default)s)",
+    )
+    parser.add_argument(
         "--gain",
         type=int,
         choices=(128, 64, 32),
@@ -182,6 +188,15 @@ def build_sample_filter(args):
     )
 
 
+def build_hx711(args):
+    if args.gpio == "pigpio":
+        from hx711.pigpio_hx711 import PigpioHX711
+
+        return PigpioHX711(args.dout, args.pd_sck)
+
+    return HX711(args.dout, args.pd_sck)
+
+
 def main():
     args = parse_args()
 
@@ -190,7 +205,7 @@ def main():
     except ValueError as exc:
         raise SystemExit("error: {}".format(exc))
 
-    hx = HX711(args.dout, args.pd_sck)
+    hx = build_hx711(args)
 
     if args.m is not None:
         hx.set_m(args.m)

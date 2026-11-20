@@ -40,6 +40,12 @@ For dependable timing, consider using a microcontroller to read the HX711 and
 send results to the Pi over I2C, 1-Wire, or another link. This library is useful
 for hobby projects, but test it in your environment before relying on it.
 
+The optional `PigpioHX711` backend uses pigpio daemon waveforms for the PD_SCK
+clock, so the critical clock edges are generated in hardware rather than by
+Python. It still uses Linux callbacks to detect when a conversion is ready. The
+original pigpio daemon does not support Raspberry Pi 5; use Pi 1-4 or a
+microcontroller for that board.
+
 ## Hardware
 
 Connect the HX711 to the Raspberry Pi according to your breakout board's
@@ -64,6 +70,14 @@ On a Raspberry Pi, install the GPIO dependency with:
 
 ```bash
 pip install .[rpi]
+```
+
+For hardware-timed PD_SCK clocking with pigpio, install the backend and start
+the daemon:
+
+```bash
+pip install .[pigpio]
+sudo pigpiod
 ```
 
 For development and tests:
@@ -95,6 +109,19 @@ finally:
 ```
 
 `read_word()` and `read_weight()` return `None` when a read times out.
+
+To use hardware-generated PD_SCK pulses with pigpio:
+
+```python
+from hx711 import PigpioHX711
+
+hx = PigpioHX711(dout=5, pd_sck=6)
+
+try:
+    raw = hx.read_word()
+finally:
+    hx.cleanup()
+```
 
 For calibrated readings, set `m` and `c` before reading:
 
@@ -129,6 +156,7 @@ GPIO/HX711 emulator and prints a message when imported.
 | API | Description |
 | --- | --- |
 | `HX711(dout, pd_sck, gpio_module=None)` | Create a reader. `gpio_module` lets you inject a fake or alternate GPIO implementation. |
+| `PigpioHX711(dout, pd_sck, pi=None, pigpio_module=None, close_pi=None)` | Read through pigpio using a hardware-timed PD_SCK waveform. Requires `pigpiod`. |
 | `read_word(timeout_seconds=0.5)` | Return one signed 24-bit value, or `None` on timeout. |
 | `read_weight(timeout_seconds=0.5)` | Read, apply `m`/`c`, and apply the optional filter. Returns `None` on timeout. |
 | `set_m(m)`, `set_c(c)` | Set calibration values. Resets an attached filter. |
@@ -215,10 +243,13 @@ Use `measure_sample_rate.py` to measure the rate you actually achieve:
 
 ```bash
 python measure_sample_rate.py
+python measure_sample_rate.py --gpio pigpio --dout 5 --pd-sck 6 --seconds 30
 ```
 
-It runs for 60 seconds and reports the mean, minimum, and maximum sample rate,
-plus dropped reads.
+It runs for 60 seconds by default and reports the mean, minimum, and maximum
+sample rate, plus dropped reads. `--gpio` selects the `rpi` (default) or
+`pigpio` HX711 backend. Use `--samples-per-batch` to change how many reads are
+timed together.
 
 ## HTTP server
 
@@ -258,6 +289,7 @@ authentication, so only expose it on a trusted network.
 | `--port` | `8080` | TCP port |
 | `--dout` | `5` | DOUT GPIO pin |
 | `--pd-sck` | `6` | PD_SCK GPIO pin |
+| `--gpio` | `rpi` | GPIO backend: `rpi` or `pigpio` |
 | `--gain` | `128` | Channel A gain 128/64, or channel B gain 32 |
 | `--m` | `1.0` | Calibration `m` |
 | `--c` | `0.0` | Calibration `c` |
@@ -395,6 +427,7 @@ The tests run without Raspberry Pi hardware by using the fake GPIO/HX711.
 | Path | Purpose |
 | --- | --- |
 | `hx711/core.py` | Main `HX711` implementation |
+| `hx711/pigpio_hx711.py` | Optional pigpio hardware-timed backend |
 | `hx711/sample_filter.py` | Median + exponential-moving-average filter |
 | `hx711/fake_gpio.py`, `hx711/fake_hx711.py` | Fake GPIO/HX711 for development |
 | `hx711/__init__.py` | Package exports: `HX711`, `SampleFilter` |
@@ -422,6 +455,15 @@ python example_hx711v0_5_1.py --polling-based
 Legacy screenshots are available in the [resources](resources) directory.
 
 ## Changelog
+
+### 20/11/2026
+
+- Added `PigpioHX711`, an optional backend that uses pigpio daemon waveforms for
+  hardware-timed PD_SCK pulses.
+- Added the `pigpio` install extra and `--gpio pigpio` to the server,
+  calibration helper, and sample-rate script.
+- Added `--dout`, `--pd-sck`, `--seconds`, and `--samples-per-batch` options to
+  `measure_sample_rate.py`.
 
 ### 14/11/2026
 

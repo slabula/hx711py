@@ -2,9 +2,11 @@ import threading
 
 import pytest
 
+from hx711 import HX711
 from hx711_server import (
     LatestReading,
     READER_JOIN_TIMEOUT_SECONDS,
+    build_hx711,
     build_sample_filter,
     parse_args,
     read_forever,
@@ -67,7 +69,23 @@ def test_filter_is_disabled_by_default():
 
     assert args.filter_sample_rate == 80.0
     assert args.filter_median_window == 5
+    assert args.gpio == "rpi"
     assert build_sample_filter(args) is None
+
+
+def test_gpio_backend_is_parsed():
+    args = parse_args(["--gpio", "pigpio"])
+
+    assert args.gpio == "pigpio"
+
+
+def test_build_hx711_uses_rpi_backend_by_default():
+    hx = build_hx711(parse_args(["--dout", "5", "--pd-sck", "6"]))
+
+    assert isinstance(hx, HX711)
+    assert hx._dout == 5
+    assert hx._pd_sck == 6
+    hx.cleanup()
 
 
 def test_filter_settings_are_parsed():

@@ -47,6 +47,12 @@ def parse_args():
         help="PD_SCK GPIO pin (default: %(default)s)",
     )
     parser.add_argument(
+        "--gpio",
+        choices=("rpi", "pigpio"),
+        default="rpi",
+        help="GPIO backend (default: %(default)s)",
+    )
+    parser.add_argument(
         "--samples",
         type=int,
         default=DEFAULT_SAMPLE_COUNT,
@@ -71,6 +77,15 @@ def parse_args():
         parser.error("--samples must be at least 1")
 
     return args
+
+
+def build_hx711(args):
+    if args.gpio == "pigpio":
+        from hx711.pigpio_hx711 import PigpioHX711
+
+        return PigpioHX711(args.dout, args.pd_sck)
+
+    return HX711(args.dout, args.pd_sck)
 
 
 def collect_samples(hx, sample_count):
@@ -145,7 +160,7 @@ def prompt_known_load(unit):
 
 def main():
     args = parse_args()
-    hx = HX711(args.dout, args.pd_sck)
+    hx = build_hx711(args)
     points = []
 
     try:
