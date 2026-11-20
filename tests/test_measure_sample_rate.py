@@ -1,7 +1,7 @@
 import pytest
 
 import measure_sample_rate as measure_module
-from measure_sample_rate import parse_args, summarize_samples
+from measure_sample_rate import LegacyHx711Adapter, parse_args, summarize_samples
 
 
 class FakeHx711:
@@ -15,10 +15,35 @@ class FakeHx711:
             return None
 
 
+class FakeLegacyHx711:
+    def __init__(self, dout, pd_sck):
+        self.pins = (dout, pd_sck)
+        self.gain = None
+        self.reset_count = 0
+
+    def setGain(self, gain):
+        self.gain = gain
+
+    def reset(self):
+        self.reset_count += 1
+
+    def getLong(self):
+        return 4242
+
+
+class FakeLegacyGpio:
+    def __init__(self):
+        self.cleanup_count = 0
+
+    def cleanup(self):
+        self.cleanup_count += 1
+
+
 def test_parse_args_defaults():
     args = parse_args([])
 
     assert args.gpio == "rpi"
+    assert args.legacy is False
     assert args.seconds == 60.0
     assert args.samples_per_batch == 100
     assert args.glitch_threshold == 1.0
@@ -32,11 +57,35 @@ def test_parse_args_defaults():
         ["--samples-per-batch", "0"],
         ["--glitch-threshold", "-1"],
         ["--glitch-mad-scale", "-1"],
+        ["--legacy", "--gpio", "pigpio"],
     ],
 )
 def test_parse_args_rejects_invalid_values(argv):
     with pytest.raises(SystemExit):
         parse_args(argv)
+
+
+def test_build_hx711_legacy_uses_v0_5_1_polling(monkeypatch):
+    module = type(
+        "LegacyModule",
+        (),
+        {"HX711": FakeLegacyHx711, "GPIO": FakeLegacyGpio()},
+    )()
+    monkeypatch.setattr(measure_module, "_import_legacy_module", lambda: module)
+
+    args = parse_args(["--legacy", "--dout", "7", "--pd-sck", "8"])
+    hx = measure_module.build_hx711(args)
+
+    assert isinstance(hx, LegacyHx711Adapter)
+    hx.set_channel_gain(hx.CH_A_GAIN_128)
+    hx.reset()
+    assert hx.read_word() == 4242
+    assert hx._hx.pins == (7, 8)
+    assert hx._hx.gain == 128
+    assert hx._hx.reset_count == 1
+
+    hx.cleanup()
+    assert module.GPIO.cleanup_count == 1
 
 
 def test_summarize_samples_counts_outliers_from_median():

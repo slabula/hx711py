@@ -1,12 +1,13 @@
 #! /usr/bin/python3
 
 """
-Serve the latest HX711 reading over HTTP as JSON.
+Serve the latest 100 HX711 readings over HTTP as JSON.
 
 Run this on the machine connected to the HX711; clients poll /weight.
 """
 
 import argparse
+import collections
 import json
 import signal
 import threading
@@ -23,6 +24,7 @@ DEFAULT_DOUT_PIN = 5
 DEFAULT_PD_SCK_PIN = 6
 DEFAULT_FILTER_SAMPLE_RATE_HZ = 80.0
 DEFAULT_FILTER_MEDIAN_WINDOW = 5
+HISTORY_SIZE = 100
 READ_TIMEOUT_SECONDS = 0.5
 READER_JOIN_TIMEOUT_SECONDS = 1.0
 
@@ -33,20 +35,38 @@ GAIN_ENUMS = {
 }
 
 
-class LatestReading:
-    """Thread-safe holder for the most recent reading."""
+class ReadingHistory:
+    """Thread-safe holder for the most recent readings."""
 
-    def __init__(self):
+    def __init__(self, capacity=HISTORY_SIZE):
         self._lock = threading.Lock()
-        self._value = None
+        self._capacity = capacity
+        self._samples = collections.deque(maxlen=capacity)
 
     def set(self, value):
+        if value is None:
+            self.clear()
+            return
+
         with self._lock:
-            self._value = value
+            self._samples.append(dict(value))
+
+    def clear(self):
+        with self._lock:
+            self._samples.clear()
 
     def get(self):
         with self._lock:
-            return self._value
+            if not self._samples:
+                return None
+
+            samples = list(self._samples)
+            payload = dict(samples[-1])
+            payload["samples"] = samples
+            return payload
+
+
+LatestReading = ReadingHistory
 
 
 def read_forever(hx, reading, unit, stop_event):
@@ -218,7 +238,7 @@ def main():
     if sample_filter is not None:
         hx.set_filter(sample_filter)
 
-    reading = LatestReading()
+    reading = ReadingHistory()
     Handler.reading = reading
 
     stop_event = threading.Event()

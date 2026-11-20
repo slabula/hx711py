@@ -22,7 +22,6 @@ The current implementation is `hx711/core.py`; `hx711/v0_5_1.py` is deprecated.
 - [Sample rate](#sample-rate)
 - [HTTP server](#http-server)
 - [Replay fake data from CSV](#replay-fake-data-from-csv)
-- [Browser training client](#browser-training-client)
 - [Hardware-free emulator](#hardware-free-emulator)
 - [Testing](#testing)
 - [Project layout](#project-layout)
@@ -247,12 +246,17 @@ Use `measure_sample_rate.py` to measure the rate you actually achieve:
 ```bash
 python measure_sample_rate.py
 python measure_sample_rate.py --gpio pigpio --dout 5 --pd-sck 6 --seconds 30
+python measure_sample_rate.py --legacy
 ```
 
 It runs for 60 seconds by default and reports the mean, minimum, and maximum
 sample rate, plus dropped reads. `--gpio` selects the `rpi` (default) or
 `pigpio` HX711 backend. Use `--samples-per-batch` to change how many reads are
 timed together.
+
+`--legacy` uses the deprecated `hx711.v0_5_1` driver and its polling
+`getLong()` method instead of the current `read_word()` driver. It only supports
+RPi.GPIO, so it cannot be combined with `--gpio pigpio`.
 
 The script also collects successful raw samples and computes the median and
 median absolute deviation (MAD) for each batch and overall. A glitch is any
@@ -263,25 +267,29 @@ threshold makes detection more sensitive.
 
 ### Backend comparison
 
-A 60-second run of each backend is recorded in `comparison.txt`. The default
-`--gpio rpi` backend was faster, while the pigpio backend was slower and did not
-remove glitches proportionally:
+A 60-second run of each method is recorded in `comparison.txt` and
+`legacy.txt`:
 
-| Backend | Mean rate | Dropped | Glitches | Mean glitch magnitude | Max glitch magnitude |
+| Method | Mean rate | Dropped | Glitches | Mean glitch magnitude | Max glitch magnitude |
 | --- | --- | --- | --- | --- | --- |
 | `--gpio rpi` | 77.26 Hz | 0 | 57 / 4600 (1.24%) | 1.01e6 | 8.32e6 |
+| `--legacy` | 73.96 Hz | 0 | 60 / 4400 (1.36%) | 1.35e6 | 8.31e6 |
 | `--gpio pigpio` | 54.15 Hz | 0 | 36 / 3300 (1.09%) | 4.24e6 | 8.44e6 |
 
-Pigpio was about 30% slower but only reduced the glitch rate from 1.24% to
-1.09%. Mean glitch magnitude also increased, and the largest glitches were
-about the same. The hardware-timed backend is therefore an option to test, not
-a guaranteed fix; keep using the median/MAD glitch statistics to judge your own
-setup.
+The current RPi.GPIO backend was the fastest and had slightly fewer glitches
+than the legacy polling method. The legacy method ran a little slower and had a
+slightly higher glitch rate. Pigpio was about 30% slower than the current
+RPi.GPIO backend but only reduced the glitch rate from 1.24% to 1.09%, with a
+higher mean glitch magnitude.
+
+All three methods still produced comparable large spikes, including maximum
+glitches around 8.3e6 raw counts. None of these read methods is a guaranteed
+fix; keep using the median/MAD glitch statistics to judge your own setup.
 
 ## HTTP server
 
-`hx711_server.py` reads the HX711 in a background thread and serves the latest
-calibrated reading as JSON over HTTP:
+`hx711_server.py` reads the HX711 in a background thread and serves up to the
+latest 100 calibrated readings as JSON over HTTP:
 
 ```bash
 python hx711_server.py --unit kg --m 0.000018 --c -2.5
@@ -296,14 +304,26 @@ python example_client.py --url http://raspberrypi.local:8080/weight
 `GET /weight` (or `GET /`) returns:
 
 ```json
-{"ts": 1794601083.345, "weight": 12.47, "unit": "kg"}
+{
+  "ts": 1794601083.345,
+  "weight": 12.47,
+  "unit": "kg",
+  "samples": [
+    {"ts": 1794601082.912, "weight": 12.31, "unit": "kg"},
+    {"ts": 1794601083.345, "weight": 12.47, "unit": "kg"}
+  ]
+}
 ```
+
+The top-level fields still describe the latest reading, so existing clients keep
+working. `samples` contains up to 100 readings, oldest first.
 
 | Field | Meaning |
 | --- | --- |
 | `ts` | UTC epoch seconds |
 | `weight` | Calibrated reading, filtered if enabled |
 | `unit` | Unit label |
+| `samples` | Up to 100 recent reading objects with `ts`, `weight`, and `unit` |
 
 The server returns `503` until the first reading is available. It has no
 authentication, so only expose it on a trusted network.
@@ -338,16 +358,10 @@ Set `--filter-sample-rate` to the actual read rate for your hardware. Without
 
 `dummy_scale_server.py` in the repository root replays a two-column
 `timestamp,weight` CSV through the same `GET /weight` payload as
-`hx711_server.py`, so you can test the browser client without hardware:
+`hx711_server.py`, so you can test HX711 JSON clients without hardware:
 
 ```bash
 python3 dummy_scale_server.py live.csv --loop --start-delay 5
-```
-
-Point the training client at the replay server:
-
-```bash
-python3 finger_training_client.py --url http://127.0.0.1:8080/weight
 ```
 
 Timestamps are scheduling marks in seconds; relative and epoch timestamps both
@@ -364,51 +378,6 @@ it. `--start-delay` holds the first reading while clients connect and tare.
 | `--speed` | `1.0` | Replay speed multiplier |
 | `--loop` | off | Restart the file when it ends |
 | `--start-delay` | `0` | Hold the first reading for this many seconds |
-
-## Browser training client
-
-The repository includes a browser-based client for the auto-regulated finger
-training protocol. It polls `hx711_server.py`, runs the protocol state machine,
-stores JSON baselines and session logs, and serves a live biofeedback UI. It
-requires Python 3 and `numpy` (used for RFD regression).
-
-```bash
-python3 finger_training_client.py --url http://raspberrypi.local:8080/weight
-```
-
-Then open `http://127.0.0.1:8090/`. The first session should be a **Baseline
-Test**; normal sessions are blocked until both hands have a baseline. After
-tare, the warm-up does not start its hold countdown until the force exceeds the
-onset threshold (`max(1.5 kg, 3 * sigma)`) and reaches the target band.
-Pulling steps hide the countdown until they actually start. Warm-up ramps
-include a 10 s pause to switch hands, and cross-hand baseline pulls are preceded
-by a labelled 60 s rest. Rest countdowns show the next step, including "pull
-maximally" hints, and the Hand/Set/Rep fields preview the next operation so you
-can get set. The live UI includes a force chart with 30 s of history and
-15 s of look-ahead: upcoming target bands are drawn dashed so the next pull is
-visible during rest (and during repeater off periods). It also shows the current
-target band/center, an onset line, and ON/OFF background shading for repeater
-sets. Readiness shows each hand's MVC/RFD as a
-percentage of baseline plus the limiting metric behind a yellow/red decision.
-The **Debug** buttons force a GREEN, YELLOW or RED session and skip the
-readiness pulls; they use seed targets if no baseline exists. Data is written to
-`data/baseline.json` and `data/sessions/`.
-
-| Option | Default | Description |
-| --- | --- | --- |
-| `--url` | `http://raspberrypi.local:8080/weight` | Scale reading URL |
-| `--host` | `127.0.0.1` | Web UI bind address |
-| `--port` | `8090` | Web UI port |
-| `--data-dir` | `data` | Baseline and session directory |
-| `--poll-interval` | `0.01` | Seconds between scale polls |
-| `--timeout` | `1.0` | HTTP request timeout |
-| `--baseline-days` | `14` | Rolling baseline window |
-
-Keep the server-side filter disabled; the client applies its own
-timestamp-normalized 10 Hz filter. See
-`auto_regulated_finger_training_protocol.md` for the full protocol and
-`auto_regulated_finger_training_plan.md` for the implementation design.
-
 
 ## Hardware-free emulator
 
@@ -496,6 +465,10 @@ Legacy screenshots are available in the [resources](resources) directory.
   `--glitch-mad-scale`.
 - Documented the local backend comparison: pigpio was slower and did not reduce
   glitches proportionally.
+- `hx711_server.py` now keeps the latest 100 readings and serves them in the
+  `/weight` JSON response as `samples`.
+- `measure_sample_rate.py` now supports `--legacy` to measure with the old
+  `hx711.v0_5_1` polling method.
 
 ### 14/11/2026
 

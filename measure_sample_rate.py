@@ -38,6 +38,11 @@ def parse_args(argv=None):
         help="GPIO backend (default: %(default)s)",
     )
     parser.add_argument(
+        "--legacy",
+        action="store_true",
+        help="use the legacy hx711.v0_5_1 polling method (RPi.GPIO only)",
+    )
+    parser.add_argument(
         "--seconds",
         type=float,
         default=DEFAULT_RUN_SECONDS,
@@ -68,6 +73,8 @@ def parse_args(argv=None):
 
     args = parser.parse_args(argv)
 
+    if args.legacy and args.gpio != "rpi":
+        parser.error("--legacy only supports --gpio rpi")
     if args.seconds <= 0:
         parser.error("--seconds must be greater than 0")
     if args.samples_per_batch < 1:
@@ -80,7 +87,40 @@ def parse_args(argv=None):
     return args
 
 
+def _import_legacy_module():
+    from hx711 import v0_5_1
+
+    return v0_5_1
+
+
+class LegacyHx711Adapter:
+    CH_A_GAIN_128 = 1
+
+    def __init__(self, dout, pd_sck):
+        self._module = _import_legacy_module()
+        self._hx = self._module.HX711(dout, pd_sck)
+
+    def set_channel_gain(self, enum_value):
+        if enum_value != self.CH_A_GAIN_128:
+            raise ValueError("legacy driver only supports channel A gain 128")
+        self._hx.setGain(128)
+
+    def reset(self):
+        self._hx.reset()
+
+    def read_word(self, timeout_seconds=0.5):
+        return self._hx.getLong()
+
+    def cleanup(self):
+        cleanup = getattr(self._module.GPIO, "cleanup", None)
+        if cleanup is not None:
+            cleanup()
+
+
 def build_hx711(args):
+    if args.legacy:
+        return LegacyHx711Adapter(args.dout, args.pd_sck)
+
     if args.gpio == "pigpio":
         from hx711.pigpio_hx711 import PigpioHX711
 
