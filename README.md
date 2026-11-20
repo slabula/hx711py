@@ -46,6 +46,9 @@ Python. It still uses Linux callbacks to detect when a conversion is ready. The
 original pigpio daemon does not support Raspberry Pi 5; use Pi 1-4 or a
 microcontroller for that board.
 
+A local comparison did not show pigpio as a clear accuracy win: it ran slower
+and reduced the glitch percentage only slightly. See [Backend comparison](#backend-comparison).
+
 ## Hardware
 
 Connect the HX711 to the Raspberry Pi according to your breakout board's
@@ -250,6 +253,30 @@ It runs for 60 seconds by default and reports the mean, minimum, and maximum
 sample rate, plus dropped reads. `--gpio` selects the `rpi` (default) or
 `pigpio` HX711 backend. Use `--samples-per-batch` to change how many reads are
 timed together.
+
+The script also collects successful raw samples and computes the median and
+median absolute deviation (MAD) for each batch and overall. A glitch is any
+sample whose absolute deviation from the median is greater than
+`max(--glitch-threshold, --glitch-mad-scale * MAD)`. The output reports glitch
+count, percentage, and total/mean/maximum magnitude in raw counts. Lowering the
+threshold makes detection more sensitive.
+
+### Backend comparison
+
+A 60-second run of each backend is recorded in `comparison.txt`. The default
+`--gpio rpi` backend was faster, while the pigpio backend was slower and did not
+remove glitches proportionally:
+
+| Backend | Mean rate | Dropped | Glitches | Mean glitch magnitude | Max glitch magnitude |
+| --- | --- | --- | --- | --- | --- |
+| `--gpio rpi` | 77.26 Hz | 0 | 57 / 4600 (1.24%) | 1.01e6 | 8.32e6 |
+| `--gpio pigpio` | 54.15 Hz | 0 | 36 / 3300 (1.09%) | 4.24e6 | 8.44e6 |
+
+Pigpio was about 30% slower but only reduced the glitch rate from 1.24% to
+1.09%. Mean glitch magnitude also increased, and the largest glitches were
+about the same. The hardware-timed backend is therefore an option to test, not
+a guaranteed fix; keep using the median/MAD glitch statistics to judge your own
+setup.
 
 ## HTTP server
 
@@ -464,6 +491,11 @@ Legacy screenshots are available in the [resources](resources) directory.
   calibration helper, and sample-rate script.
 - Added `--dout`, `--pd-sck`, `--seconds`, and `--samples-per-batch` options to
   `measure_sample_rate.py`.
+- `measure_sample_rate.py` now collects raw samples and reports median/MAD-based
+  glitch counts and magnitudes, tunable with `--glitch-threshold` and
+  `--glitch-mad-scale`.
+- Documented the local backend comparison: pigpio was slower and did not reduce
+  glitches proportionally.
 
 ### 14/11/2026
 
