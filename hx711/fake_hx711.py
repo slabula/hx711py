@@ -87,19 +87,26 @@ import time
 # mode.  After a reset or power-down event, input selection is default to
 # Channel A with a gain of 128.
 
+def int_to_twos_complement_24bit(int_value):
+    """Convert a signed value to a saturated 24-bit two's complement value."""
+    if int_value < -0x800000:
+        int_value = -0x800000
+    elif int_value > 0x7fffff:
+        int_value = 0x7fffff
+
+    return int_value & 0xffffff
+
+
 class FakeHx711:
     """Simulates a HX711, currently only emulates channel A: Gain 128,
     attempting to use other settings will raise an exception
     """
 
-    # Sample rate is 80 Hz --> period 0.0125ms
+    # Sample rate is 80 Hz --> period 0.0125s
     SAMPLE_PERIOD_SECONDS = 0.0125
 
     # Holding PD_SCK pin high for 60us will turn it off.
     POWER_OFF_PERIOD_SECONDS = 0.00006
-
-    REFERENCE_A_UNIT = 13.819
-    REFERENCE_B_UNIT = 13.819
 
     def __init__(self, value_list=None):
         self._powered_down = True
@@ -111,32 +118,39 @@ class FakeHx711:
         self._raw_value = 0x001337
         self._clock_posedge_count = 0
         self._clock_negedge_count = 0
-        self._next_sample_due_time = time.time() + self.SAMPLE_PERIOD_SECONDS
+        self._next_sample_due_time = time.monotonic() + self.SAMPLE_PERIOD_SECONDS
         self._sample_ready = False
         self._prev_clock_count = None
 
-    def inject_float_samples(self, sample_list):
+    def inject_float_samples(self, sample_list, m, c):
         """Inject a list of real samples to be output by the HX711 emulator."""
-        for sample in sample_list:
-            self._pending_value_list.append(int(sample * self.REFERENCE_A_UNIT))
+        for real_sample in sample_list:
+            raw_int = int((real_sample - c) / m)
+            twos_sample = int_to_twos_complement_24bit(raw_int)
+            self._pending_value_list.append(twos_sample)
 
     def inject_raw_samples(self, sample_list):
         self._pending_value_list += sample_list
 
     def update_next_sample_due_time(self):
-        self._next_sample_due_time = time.time() + self.SAMPLE_PERIOD_SECONDS
+        self._next_sample_due_time = time.monotonic() + self.SAMPLE_PERIOD_SECONDS
 
     def update_power_down_deadline_time(self):
-        self._power_down_deadline_time = time.time() + self.POWER_OFF_PERIOD_SECONDS
+        self._power_down_deadline_time = time.monotonic() + self.POWER_OFF_PERIOD_SECONDS
 
     def update(self, pos_edge=False, neg_edge=False):
         if self._power_down_deadline_time is not None:
-            if time.time() >= self._power_down_deadline_time:
+            if time.monotonic() >= self._power_down_deadline_time:
                 # print("Powering down.")
                 self._powered_down = True
                 self._power_down_deadline_time = None
+                self._clock_posedge_count = 0
+                self._clock_negedge_count = 0
 
-        if time.time() >= self._next_sample_due_time:
+        if (
+            not self._powered_down
+            and time.monotonic() >= self._next_sample_due_time
+        ):
             self.next_sample()
 
         if pos_edge:

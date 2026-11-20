@@ -1,3 +1,5 @@
+import threading
+
 import pytest
 
 from hx711.core import HX711, twos_complement_24bit_to_int
@@ -105,6 +107,101 @@ def test_read_word_sends_gain_selection_clocks(gain, expected_clock_edges):
 
     assert hx.read_word() == 0
     assert gpio.rising_edges == expected_clock_edges
+
+
+def test_read_weight_defaults_to_raw_value():
+    hx = HX711(5, 6, gpio_module=RecordingGpio(sample=0x001234))
+
+    assert hx.read_weight() == 0x001234
+
+
+def test_read_weight_applies_m_and_c():
+    hx = HX711(5, 6, gpio_module=RecordingGpio(sample=1000))
+
+    hx.set_m(0.5)
+    hx.set_c(-10.0)
+
+    assert hx.read_weight() == 490.0
+
+
+def test_read_weight_returns_none_on_timeout():
+    hx = HX711(5, 6, gpio_module=RecordingGpio(ready=False))
+
+    hx.set_m(2.0)
+    hx.set_c(1.0)
+
+    assert hx.read_weight(timeout_seconds=0.01) is None
+
+
+class TrackingRLock:
+    def __init__(self):
+        self._lock = threading.RLock()
+        self.depth = 0
+        self.enter_count = 0
+
+    def __enter__(self):
+        self._lock.acquire()
+        self.depth += 1
+        self.enter_count += 1
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        self.depth -= 1
+        self._lock.release()
+
+
+class LockCheckingFilter:
+    def __init__(self, lock):
+        self._lock = lock
+        self.lock_was_held = None
+        self.reset_lock_was_held = None
+
+    def sample(self, value):
+        self.lock_was_held = self._lock.depth > 0
+        return value * 2
+
+    def reset(self):
+        self.reset_lock_was_held = self._lock.depth > 0
+
+
+def test_read_weight_filters_while_holding_read_lock():
+    hx = HX711(5, 6, gpio_module=RecordingGpio(sample=100))
+    lock = TrackingRLock()
+    hx._read_lock = lock
+    sample_filter = LockCheckingFilter(lock)
+    hx.set_filter(sample_filter)
+
+    assert hx.read_weight() == 200
+    assert sample_filter.lock_was_held
+
+
+@pytest.mark.parametrize(
+    "setter, value, attribute",
+    [("set_m", 2.0, "_m"), ("set_c", -1.5, "_c")],
+)
+def test_calibration_setters_reset_filter_while_holding_read_lock(
+    setter, value, attribute
+):
+    hx = HX711(5, 6, gpio_module=RecordingGpio(sample=0))
+    lock = TrackingRLock()
+    hx._read_lock = lock
+    sample_filter = LockCheckingFilter(lock)
+    hx.set_filter(sample_filter)
+
+    getattr(hx, setter)(value)
+
+    assert getattr(hx, attribute) == value
+    assert sample_filter.reset_lock_was_held
+
+
+def test_set_filter_holds_read_lock():
+    hx = HX711(5, 6, gpio_module=RecordingGpio(sample=0))
+    lock = TrackingRLock()
+    hx._read_lock = lock
+
+    hx.set_filter(LockCheckingFilter(lock))
+
+    assert lock.enter_count == 1
 
 
 @pytest.mark.parametrize(
