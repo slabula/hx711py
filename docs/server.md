@@ -76,5 +76,5 @@ Set `--filter-sample-rate` to the actual read rate for your hardware. Without
 ## Related guides
 
 - [USB serial streaming](usb-serial.md) — stream `timestamp,weight` lines over a Pi Zero W USB gadget port.
-- [Emulator and CSV replay](emulator.md) — test JSON clients without hardware.
+- [Emulator](emulator.md) — test client code without hardware using fake GPIO/HX711 classes.
 - [USB serial streaming](usb-serial.md#run-the-server-at-boot) — start the server automatically with systemd.

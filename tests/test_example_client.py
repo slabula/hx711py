@@ -126,7 +126,7 @@ def test_stream_serial_prints_samples_and_estimates_rate(monkeypatch, capsys):
         pass
 
     assert module.open_args == ("/dev/ttyACM0", 115200, 1.0)
-    assert port.closed is False
+    assert port.closed is True
 
     lines = capsys.readouterr().out.splitlines()
     assert lines[0] == "Reading from /dev/ttyACM0"

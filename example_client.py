@@ -173,49 +173,56 @@ def stream_serial(path, baudrate, timeout, unit):
 
     print("Reading from {}".format(path))
     pending = b""
-    while True:
-        try:
-            if port is None:
-                port = serial.Serial(path, baudrate, timeout=timeout)
-
-            chunk = port.readline()
-            if not chunk:
-                continue
-
-            pending += chunk
-            if len(pending) > MAX_SERIAL_LINE_BYTES:
-                # No newline in a long time: treat it as garbage, not a sample.
-                pending = b""
-                continue
-            if not pending.endswith(b"\n"):
-                # pyserial returns a partial line when the read timeout expires.
-                continue
-
-            line, pending = pending, b""
+    try:
+        while True:
             try:
-                ts, weight = parse_serial_line(line)
-            except ValueError:
-                continue
+                if port is None:
+                    port = serial.Serial(path, baudrate, timeout=timeout)
 
-            sample = {"ts": ts, "weight": weight}
-            if unit:
-                sample["unit"] = unit
-            history.append(sample)
+                chunk = port.readline()
+                if not chunk:
+                    continue
 
-            reading = dict(sample)
-            reading["samples"] = list(history)
-            print(format_reading(reading))
-        except KeyboardInterrupt:
-            raise
-        except Exception as exc:
-            print("Serial error: {}".format(exc))
-            if port is not None:
+                pending += chunk
+                if len(pending) > MAX_SERIAL_LINE_BYTES:
+                    # No newline in a long time: treat it as garbage, not a sample.
+                    pending = b""
+                    continue
+                if not pending.endswith(b"\n"):
+                    # pyserial returns a partial line when the read timeout expires.
+                    continue
+
+                line, pending = pending, b""
                 try:
-                    port.close()
-                except Exception:
-                    pass
-                port = None
-            time.sleep(DEFAULT_SERIAL_RETRY_SECONDS)
+                    ts, weight = parse_serial_line(line)
+                except ValueError:
+                    continue
+
+                sample = {"ts": ts, "weight": weight}
+                if unit:
+                    sample["unit"] = unit
+                history.append(sample)
+
+                reading = dict(sample)
+                reading["samples"] = list(history)
+                print(format_reading(reading))
+            except KeyboardInterrupt:
+                raise
+            except Exception as exc:
+                print("Serial error: {}".format(exc))
+                if port is not None:
+                    try:
+                        port.close()
+                    except Exception:
+                        pass
+                    port = None
+                time.sleep(DEFAULT_SERIAL_RETRY_SECONDS)
+    finally:
+        if port is not None:
+            try:
+                port.close()
+            except Exception:
+                pass
 
 
 def main():

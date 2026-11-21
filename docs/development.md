@@ -24,7 +24,6 @@ The tests run without Raspberry Pi hardware by using the fake GPIO/HX711.
 | `measure_sample_rate.py` | Sample-rate measurement utility |
 | `hx711_server.py` | HTTP JSON server |
 | `example_client.py` | Server polling client, with serial mode |
-| `dummy_scale_server.py` | CSV replay server for client testing |
 | `hx711/v0_5_1.py` | Deprecated previous implementation |
 | `example_hx711v0_5_1.py` | Example for the deprecated version |
 | `docs/` | Topic-based documentation |

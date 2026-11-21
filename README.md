@@ -19,9 +19,10 @@ Full documentation lives in [`docs/`](docs/README.md):
 - [API reference](docs/api.md) — reader API, calibration, filtering, and sample-rate measurement
 - [HTTP server](docs/server.md) — JSON endpoint, options, and HTTP client
 - [USB serial streaming](docs/usb-serial.md) — Pi Zero W OTG setup, serial client, permissions, and systemd
-- [Emulator and CSV replay](docs/emulator.md) — hardware-free testing
+- [Emulator](docs/emulator.md) — hardware-free testing
 - [Emulator review](docs/emulator-review.md) — fake GPIO/HX711 implementation review
 - [Development](docs/development.md) — tests, project layout, and the deprecated driver
+- [Improvement backlog](docs/improvement-backlog.md) — ranked remaining suggestions
 - [Changelog](docs/changelog.md)
 
 ## Quick example
