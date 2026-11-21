@@ -1,0 +1,28 @@
+# Example systemd unit for hx711_server.py.
+# Copy to /etc/systemd/system/hx711-server.service and edit paths/calibration.
+
+[Unit]
+Description=HX711 server with USB serial streaming
+After=network.target
+
+# If you used the ConfigFS gadget method, enable these two lines:
+# Wants=usb-gadget-serial.service
+# After=usb-gadget-serial.service
+
+[Service]
+Type=simple
+User=pi
+Group=dialout
+WorkingDirectory=/home/pi/hx711py
+ExecStart=/usr/bin/python3 /home/pi/hx711py/hx711_server.py \
+    --unit kg \
+    --m 0.000018 \
+    --c -2.5 \
+    --serial /dev/ttyGS0
+
+# /dev/ttyGS0 may appear slightly after boot; retry until it does.
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

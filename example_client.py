@@ -1,12 +1,19 @@
 #! /usr/bin/python3
 
 """
-Poll an hx711_server.py instance and print timestamp/weight values.
+Read an hx711_server.py instance and print timestamp/weight/sample-rate values.
+
+By default this polls the HTTP /weight endpoint. With --serial it instead reads
+"timestamp,weight" lines from a USB ACM device such as /dev/ttyACM0.
 """
 
 import argparse
+import collections
+import csv
 import datetime
 import json
+import math
+import os
 import time
 import urllib.error
 import urllib.request
@@ -15,10 +22,16 @@ import urllib.request
 DEFAULT_URL = "http://raspberrypi.local:8080/weight"
 DEFAULT_INTERVAL = 0.5
 DEFAULT_TIMEOUT = 2.0
+DEFAULT_SERIAL_BAUDRATE = 115200
+DEFAULT_SERIAL_RETRY_SECONDS = 1.0
+SERIAL_HISTORY_SIZE = 100
+MAX_SERIAL_LINE_BYTES = 1024
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Poll an HX711 HTTP server.")
+    parser = argparse.ArgumentParser(
+        description="Read HX711 samples over HTTP or a USB serial device."
+    )
     parser.add_argument(
         "--url",
         default=DEFAULT_URL,
@@ -34,7 +47,28 @@ def parse_args():
         "--timeout",
         type=float,
         default=DEFAULT_TIMEOUT,
-        help="request timeout in seconds (default: %(default)s)",
+        help="request/serial timeout in seconds (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--serial",
+        metavar="DEVICE",
+        help="read 'timestamp,weight' lines from DEVICE instead of HTTP",
+    )
+    parser.add_argument(
+        "--serial-baudrate",
+        type=int,
+        default=DEFAULT_SERIAL_BAUDRATE,
+        metavar="BAUD",
+        help="serial baud rate (default: %(default)s; ignored by USB ACM)",
+    )
+    parser.add_argument(
+        "--unit",
+        help="unit label to print for serial samples (not sent on the wire)",
+    )
+    parser.add_argument(
+        "--csv",
+        metavar="FILE",
+        help="append timestamp,weight samples to FILE",
     )
     return parser.parse_args()
 
@@ -47,32 +81,283 @@ def fetch(url, timeout):
         response.close()
 
 
-def main():
-    args = parse_args()
+def import_serial_module():
+    try:
+        import serial
+    except ImportError:
+        raise SystemExit("error: --serial requires pyserial (pip install pyserial)")
+    return serial
 
+
+def parse_serial_line(line):
+    """Parse one complete 'timestamp,weight' line from the serial stream.
+
+    Malformed lines, non-finite values, and non-positive timestamps raise
+    ValueError so the caller can skip them.
+    """
+    parts = line.decode("utf-8", errors="replace").strip().split(",")
+    if len(parts) != 2:
+        raise ValueError("expected 'timestamp,weight'")
+
+    try:
+        ts = float(parts[0])
+        weight = float(parts[1])
+    except ValueError:
+        raise ValueError("timestamp and weight must be floats")
+
+    if not math.isfinite(ts) or not math.isfinite(weight):
+        raise ValueError("timestamp and weight must be finite")
+    if ts <= 0:
+        raise ValueError("timestamp must be positive")
+
+    return ts, weight
+
+
+class CsvSampleWriter:
+    """Append ``timestamp,weight`` rows to a CSV file.
+
+    HTTP responses contain overlapping history, so callers can request
+    de-duplication using the recent-sample window size. Serial lines are unique
+    samples and are written as received.
+    """
+
+    HEADER = ("timestamp", "weight")
+
+    def __init__(self, path):
+        self._path = os.path.expanduser(path)
+        needs_header = (
+            not os.path.exists(self._path) or os.path.getsize(self._path) == 0
+        )
+        self._file = open(self._path, "a", newline="")
+        self._writer = csv.writer(self._file)
+
+        if needs_header:
+            self._writer.writerow(self.HEADER)
+            self._file.flush()
+
+        self._seen_keys = collections.deque()
+        self._seen_set = set()
+
+    @staticmethod
+    def _valid_sample(sample):
+        if not isinstance(sample, dict):
+            return None
+
+        ts = sample.get("ts")
+        weight = sample.get("weight")
+
+        if (
+            not isinstance(ts, (int, float))
+            or isinstance(ts, bool)
+            or not math.isfinite(ts)
+            or ts <= 0
+        ):
+            return None
+
+        if (
+            not isinstance(weight, (int, float))
+            or isinstance(weight, bool)
+            or not math.isfinite(weight)
+        ):
+            return None
+
+        return ts, weight
+
+    def write(self, sample, deduplicate=False):
+        values = self._valid_sample(sample)
+        if values is None:
+            return False
+
+        ts, weight = values
+        key = (ts, weight)
+
+        if deduplicate:
+            if key in self._seen_set:
+                return False
+
+            self._seen_keys.append(key)
+            self._seen_set.add(key)
+            if len(self._seen_keys) > SERIAL_HISTORY_SIZE:
+                old_key = self._seen_keys.popleft()
+                self._seen_set.discard(old_key)
+
+        self._writer.writerow([ts, weight])
+        self._file.flush()
+        return True
+
+    def write_samples(self, samples, deduplicate=True):
+        for sample in samples or []:
+            self.write(sample, deduplicate=deduplicate)
+
+    def close(self):
+        self._file.close()
+
+
+def calculate_sample_rate(samples):
+    """Estimate rate from sample timestamps.
+
+    Repeated weights are legitimate samples, so they must not be discarded.
+    """
+    if not samples:
+        return None
+
+    timestamps = []
+    for sample in samples:
+        ts = sample.get("ts")
+        if (
+            not isinstance(ts, (int, float))
+            or isinstance(ts, bool)
+            or not math.isfinite(ts)
+            or ts <= 0
+        ):
+            continue
+        timestamps.append(ts)
+
+    if len(timestamps) < 2:
+        return None
+
+    first = min(timestamps)
+    last = max(timestamps)
+    if last <= first:
+        return None
+
+    return (len(timestamps) - 1) / (last - first)
+
+
+def format_reading(reading):
+    when = datetime.datetime.fromtimestamp(reading["ts"])
+    text = "{}  {:.3f}".format(
+        when.strftime("%Y-%m-%d %H:%M:%S"),
+        reading["weight"],
+    )
+
+    unit = reading.get("unit")
+    if unit:
+        text += " {}".format(unit)
+
+    sample_rate = calculate_sample_rate(reading.get("samples"))
+    if sample_rate is None:
+        text += "  rate n/a"
+    else:
+        text += "  rate {:.2f} Hz".format(sample_rate)
+
+    return text
+
+
+def poll_http(url, interval, timeout, csv_writer=None):
+    while True:
+        try:
+            reading = fetch(url, timeout)
+            print(format_reading(reading))
+
+            if csv_writer is not None:
+                samples = reading.get("samples")
+                if samples:
+                    csv_writer.write_samples(samples)
+                else:
+                    csv_writer.write(reading, deduplicate=True)
+        except urllib.error.HTTPError as exc:
+            if exc.code == 503:
+                print("Waiting for the first reading...")
+            else:
+                print("HTTP error: {}".format(exc))
+        except Exception as exc:
+            print("Error: {}".format(exc))
+
+        time.sleep(interval)
+
+
+def stream_serial(path, baudrate, timeout, unit, csv_writer=None):
+    serial = import_serial_module()
+    history = collections.deque(maxlen=SERIAL_HISTORY_SIZE)
+    port = None
+
+    print("Reading from {}".format(path))
+    pending = b""
     try:
         while True:
             try:
-                reading = fetch(args.url, args.timeout)
-                when = datetime.datetime.fromtimestamp(reading["ts"])
-                print(
-                    "{}  {:.3f} {}".format(
-                        when.strftime("%Y-%m-%d %H:%M:%S"),
-                        reading["weight"],
-                        reading.get("unit", ""),
-                    ).rstrip()
-                )
-            except urllib.error.HTTPError as exc:
-                if exc.code == 503:
-                    print("Waiting for the first reading...")
-                else:
-                    print("HTTP error: {}".format(exc))
-            except Exception as exc:
-                print("Error: {}".format(exc))
+                if port is None:
+                    port = serial.Serial(path, baudrate, timeout=timeout)
 
-            time.sleep(args.interval)
+                chunk = port.readline()
+                if not chunk:
+                    continue
+
+                pending += chunk
+                if len(pending) > MAX_SERIAL_LINE_BYTES:
+                    # No newline in a long time: treat it as garbage, not a sample.
+                    pending = b""
+                    continue
+                if not pending.endswith(b"\n"):
+                    # pyserial returns a partial line when the read timeout expires.
+                    continue
+
+                line, pending = pending, b""
+                try:
+                    ts, weight = parse_serial_line(line)
+                except ValueError:
+                    continue
+
+                sample = {"ts": ts, "weight": weight}
+                if unit:
+                    sample["unit"] = unit
+                history.append(sample)
+
+                reading = dict(sample)
+                reading["samples"] = list(history)
+                print(format_reading(reading))
+
+                if csv_writer is not None:
+                    csv_writer.write(sample)
+            except KeyboardInterrupt:
+                raise
+            except Exception as exc:
+                print("Serial error: {}".format(exc))
+                if port is not None:
+                    try:
+                        port.close()
+                    except Exception:
+                        pass
+                    port = None
+                time.sleep(DEFAULT_SERIAL_RETRY_SECONDS)
+    finally:
+        if port is not None:
+            try:
+                port.close()
+            except Exception:
+                pass
+
+
+def main():
+    args = parse_args()
+    csv_writer = None
+
+    if args.csv:
+        try:
+            csv_writer = CsvSampleWriter(args.csv)
+        except OSError as exc:
+            raise SystemExit(
+                "error: cannot open CSV file {}: {}".format(args.csv, exc)
+            )
+        print("Writing samples to {}".format(args.csv))
+
+    try:
+        if args.serial:
+            stream_serial(
+                args.serial,
+                args.serial_baudrate,
+                args.timeout,
+                args.unit,
+                csv_writer,
+            )
+        else:
+            poll_http(args.url, args.interval, args.timeout, csv_writer)
     except KeyboardInterrupt:
         print("\nBye!")
+    finally:
+        if csv_writer is not None:
+            csv_writer.close()
 
 
 if __name__ == "__main__":

@@ -1,10 +1,23 @@
+import math
 import threading
 
 import pytest
 
+from hx711 import (
+    ExponentialFilter,
+    HampelExponentialFilter,
+    HampelFilter,
+    HX711,
+    MedianExponentialFilter,
+    MedianFilter,
+)
 from hx711_server import (
-    LatestReading,
+    DEFAULT_SERIAL_BAUDRATE,
+    HISTORY_SIZE,
     READER_JOIN_TIMEOUT_SECONDS,
+    CsvSerialPublisher,
+    ReadingHistory,
+    build_hx711,
     build_sample_filter,
     parse_args,
     read_forever,
@@ -12,29 +25,51 @@ from hx711_server import (
 )
 
 
-def test_latest_reading_starts_empty():
-    assert LatestReading().get() is None
+def test_reading_history_starts_empty():
+    assert ReadingHistory().get() is None
 
 
-def test_latest_reading_returns_most_recent_value():
-    reading = LatestReading()
+def test_reading_history_returns_latest_value_and_all_samples():
+    reading = ReadingHistory()
 
     reading.set({"ts": 1.0, "weight": 2.0, "unit": "kg"})
     reading.set({"ts": 3.0, "weight": 4.0, "unit": "kg"})
 
-    assert reading.get() == {"ts": 3.0, "weight": 4.0, "unit": "kg"}
+    assert reading.get() == {
+        "ts": 3.0,
+        "weight": 4.0,
+        "unit": "kg",
+        "samples": [
+            {"ts": 1.0, "weight": 2.0, "unit": "kg"},
+            {"ts": 3.0, "weight": 4.0, "unit": "kg"},
+        ],
+    }
 
 
-def test_latest_reading_can_be_reset_to_none():
-    reading = LatestReading()
+def test_reading_history_keeps_only_the_most_recent_samples():
+    reading = ReadingHistory()
+
+    for seq in range(HISTORY_SIZE + 10):
+        reading.set({"seq": seq})
+
+    payload = reading.get()
+
+    assert len(payload["samples"]) == HISTORY_SIZE
+    assert payload["seq"] == HISTORY_SIZE + 9
+    assert payload["samples"][0]["seq"] == 10
+    assert payload["samples"][-1]["seq"] == HISTORY_SIZE + 9
+
+
+def test_reading_history_can_be_reset_to_none():
+    reading = ReadingHistory()
     reading.set({"weight": 2.0})
     reading.set(None)
 
     assert reading.get() is None
 
 
-def test_latest_reading_is_thread_safe():
-    reading = LatestReading()
+def test_reading_history_is_thread_safe():
+    reading = ReadingHistory()
     errors = []
 
     def writer():
@@ -48,7 +83,9 @@ def test_latest_reading_is_thread_safe():
         try:
             for _ in range(1000):
                 value = reading.get()
-                if value is not None and "seq" not in value:
+                if value is not None and (
+                    "seq" not in value or "samples" not in value
+                ):
                     raise AssertionError(value)
         except Exception as exc:
             errors.append(exc)
@@ -56,18 +93,36 @@ def test_latest_reading_is_thread_safe():
     threads = [threading.Thread(target=writer), threading.Thread(target=reader)]
     for thread in threads:
         thread.start()
-    for thread in threads:
         thread.join()
 
     assert errors == []
 
 
+
 def test_filter_is_disabled_by_default():
     args = parse_args([])
 
+    assert args.filter == "none"
     assert args.filter_sample_rate == 80.0
+    assert args.filter_window == 5
     assert args.filter_median_window == 5
+    assert args.gpio == "rpi"
     assert build_sample_filter(args) is None
+
+
+def test_gpio_backend_is_parsed():
+    args = parse_args(["--gpio", "pigpio"])
+
+    assert args.gpio == "pigpio"
+
+
+def test_build_hx711_uses_rpi_backend_by_default():
+    hx = build_hx711(parse_args(["--dout", "5", "--pd-sck", "6"]))
+
+    assert isinstance(hx, HX711)
+    assert hx._dout == 5
+    assert hx._pd_sck == 6
+    hx.cleanup()
 
 
 def test_filter_settings_are_parsed():
@@ -102,6 +157,87 @@ def test_invalid_filter_settings_raise_value_error(argv, match):
 
     with pytest.raises(ValueError, match=match):
         build_sample_filter(args)
+
+
+def test_legacy_cutoff_selects_median_ema_filter():
+    args = parse_args(["--filter-cutoff", "5.5"])
+
+    assert args.filter == "median-ema"
+
+    sample_filter = build_sample_filter(args)
+
+    assert isinstance(sample_filter, MedianExponentialFilter)
+
+
+def test_median_filter_can_be_selected_without_a_cutoff():
+    args = parse_args(["--filter", "median", "--filter-window", "3"])
+    sample_filter = build_sample_filter(args)
+
+    assert isinstance(sample_filter, MedianFilter)
+    assert sample_filter._window == 3
+
+
+def test_ema_filter_requires_a_cutoff():
+    args = parse_args(["--filter", "ema"])
+
+    with pytest.raises(ValueError, match="--filter-cutoff"):
+        build_sample_filter(args)
+
+
+def test_ema_filter_is_built_from_cutoff_and_sample_rate():
+    sample_filter = build_sample_filter(
+        parse_args(
+            ["--filter", "ema", "--filter-cutoff", "5.5", "--filter-sample-rate", "100"]
+        )
+    )
+
+    assert isinstance(sample_filter, ExponentialFilter)
+    assert sample_filter._sample_frequency_hz == 100.0
+    assert sample_filter._cutoff_frequency_hz == 5.5
+
+
+def test_hampel_filter_settings_are_parsed():
+    args = parse_args(
+        [
+            "--filter",
+            "hampel",
+            "--filter-window",
+            "9",
+            "--filter-mad-threshold",
+            "4",
+            "--filter-min-mad",
+            "0.5",
+        ]
+    )
+    sample_filter = build_sample_filter(args)
+
+    assert isinstance(sample_filter, HampelFilter)
+    assert sample_filter._window == 9
+    assert sample_filter._threshold == 4.0
+    assert sample_filter._min_mad == 0.5
+
+
+def test_hampel_ema_filter_uses_cutoff_and_hampel_settings():
+    sample_filter = build_sample_filter(
+        parse_args(
+            [
+                "--filter",
+                "hampel-ema",
+                "--filter-cutoff",
+                "5",
+                "--filter-window",
+                "7",
+                "--filter-mad-threshold",
+                "2.5",
+            ]
+        )
+    )
+
+    assert isinstance(sample_filter, HampelExponentialFilter)
+    assert sample_filter._alpha == pytest.approx(
+        1.0 - math.exp(-2.0 * math.pi * 5.0 / 80.0)
+    )
+    assert sample_filter._hampel._threshold == 2.5
 
 
 class StopAfterOneRead:
@@ -142,7 +278,7 @@ class CleanupRecorder:
 def test_read_forever_stops_after_stop_event_is_set():
     stop_event = threading.Event()
     hx = StopAfterOneRead(stop_event)
-    reading = LatestReading()
+    reading = ReadingHistory()
 
     read_forever(hx, reading, "kg", stop_event)
 
@@ -155,7 +291,7 @@ def test_read_forever_does_not_read_when_already_stopped():
     stop_event = threading.Event()
     stop_event.set()
     hx = StopAfterOneRead(stop_event)
-    reading = LatestReading()
+    reading = ReadingHistory()
 
     read_forever(hx, reading, "kg", stop_event)
 
@@ -186,3 +322,93 @@ def test_stop_reader_and_cleanup_skips_cleanup_if_reader_is_alive():
     assert stopped is False
     assert stop_event.is_set()
     assert hx.cleaned is False
+
+
+class RecordingPort:
+    def __init__(self, write_error=None):
+        self.writes = []
+        self.closed = False
+        self.write_error = write_error
+
+    def write(self, data):
+        if self.write_error is not None:
+            raise self.write_error
+        self.writes.append(data)
+
+    def close(self):
+        self.closed = True
+
+
+def test_csv_serial_publisher_writes_timestamp_and_weight():
+    port = RecordingPort()
+    publisher = CsvSerialPublisher(port)
+
+    publisher.publish(1.25, 12.5)
+    publisher.close()
+
+    assert port.writes == [b"1.25,12.5\n"]
+    assert port.closed is True
+
+
+def test_csv_serial_publisher_drops_failed_writes(capsys):
+    port = RecordingPort(write_error=OSError("device gone"))
+    publisher = CsvSerialPublisher(port)
+
+    publisher.publish(1.0, 2.0)
+    publisher.publish(3.0, 4.0)
+
+    assert port.writes == []
+    assert "dropping samples" in capsys.readouterr().err
+
+
+def test_parse_args_serial_defaults():
+    args = parse_args([])
+
+    assert args.serial is None
+    assert args.serial_baudrate == DEFAULT_SERIAL_BAUDRATE
+
+    args = parse_args(["--serial", "/dev/ttyGS0", "--serial-baudrate", "9600"])
+
+    assert args.serial == "/dev/ttyGS0"
+    assert args.serial_baudrate == 9600
+
+
+class StopAfterTwoReads:
+    def __init__(self, stop_event):
+        self.stop_event = stop_event
+        self.values = iter([1.0, 2.0])
+
+    def read_weight(self, timeout_seconds=0.5):
+        try:
+            return next(self.values)
+        except StopIteration:
+            self.stop_event.set()
+            return None
+
+
+def test_read_forever_publishes_each_sample():
+    stop_event = threading.Event()
+    hx = StopAfterTwoReads(stop_event)
+    reading = ReadingHistory()
+    port = RecordingPort()
+    publisher = CsvSerialPublisher(port)
+
+    read_forever(hx, reading, "kg", stop_event, publisher)
+
+    assert len(port.writes) == 2
+    assert port.writes[0].endswith(b",1.0\n")
+    assert port.writes[1].endswith(b",2.0\n")
+    assert [sample["weight"] for sample in reading.get()["samples"]] == [1.0, 2.0]
+
+
+def test_stop_reader_and_cleanup_closes_publisher():
+    stop_event = threading.Event()
+    read_thread = FakeReaderThread(alive_after_join=False)
+    hx = CleanupRecorder()
+    port = RecordingPort()
+    publisher = CsvSerialPublisher(port)
+
+    stopped = stop_reader_and_cleanup(read_thread, stop_event, hx, publisher)
+
+    assert stopped is True
+    assert port.closed is True
