@@ -27,69 +27,10 @@ The main issues are in power-down handling and rejected gain selections.
 
 | Priority | Issue |
 | --- | --- |
-| P1 | Conversions continue while powered down and consume pending samples (fixed) |
 | P1 | Unsupported gains fail on a later, alternating read and consume samples |
 | P2 | Injected samples behave as a FIFO instead of a single result register |
-| P2 | Deadlines use `time.monotonic()` (fixed) |
 | P3 | Initial power state does not match power-up behaviour |
 | P3 | Minor comment/dead-code/range issues |
-
-## P1: Conversions Continue While Powered Down (Fixed)
-
-Location (before fix): `hx711/fake_hx711.py:132-140`, `:143`, `:160-164`, `:172-186`
-
-**Status:** Fixed. `update()` now skips `next_sample()` while powered down
-(`:141-145`) and clears the clock edge counters when power-down is detected
-(`:133-139`).
-
-Previously, `update()` called `next_sample()` before considering `_powered_down`:
-
-```python
-if time.time() >= self._next_sample_due_time:
-    self.next_sample()
-```
-
-So any call to `dout()`/`is_ready()` while PD_SCK is held high still advances
-the conversion and pops values from `_pending_value_list`. A real HX711 stops
-converting while powered down.
-
-The power-down pulse was also counted as a data clock because `set_pd_sck(True)`
-increments `_clock_posedge_count`. The next conversion then reported:
-
-```text
-Unrecognised clock count! (1)
-```
-
-Reproduction:
-
-```python
-import time
-from hx711 import HX711
-from hx711.fake_hx711 import FakeHx711
-from hx711.fake_gpio import FakeGpio
-
-fake = FakeHx711()
-fake.inject_raw_samples([1, 2, 3])
-hx = HX711(5, 6, gpio_module=FakeGpio(fake))
-hx.reset()
-hx.power_down()
-
-end = time.time() + 0.05
-while time.time() < end:
-    hx.is_ready()
-    time.sleep(0.001)
-
-hx.power_up()
-print(hx.read_word())  # printed 3 before the fix; now prints 1
-```
-
-Fix applied:
-
-- `update()` only calls `next_sample()` when not powered down.
-- Clock edge counts are cleared when power-down is detected, so the power-down
-  pulse is not interpreted as a data clock.
-- Wake behaviour is unchanged: reset counts, clear `_sample_ready`, and
-  schedule the next conversion.
 
 ## P1: Unsupported Gain Rejection Is Delayed and Intermittent
 
@@ -183,18 +124,6 @@ This may be intentional for deterministic tests. If so, document it as FIFO
 test-injection behaviour. If realistic timing is wanted, drop stale pending
 values based on the number of elapsed conversion periods and keep only the
 latest.
-
-## P2: Use `time.monotonic()` for Deadlines
-
-Location: `hx711/fake_hx711.py:114`, `:127`, `:130`, `:134`, `:139`
-
-**Status:** Fixed. All sample and power-down deadlines now use
-`time.monotonic()`.
-
-The emulator previously used `time.time()` for the sample period and power-down
-deadline.
-`time.time()` can jump when the system clock is adjusted. `HX711` already uses
-`time.monotonic()` for its timeouts, so the emulator should do the same.
 
 ## P3: Initial Power State
 
