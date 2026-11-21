@@ -1,5 +1,19 @@
 # Changelog
 
+## 2026-11-21
+
+- Added `NoFilter`, `MedianFilter`, `ExponentialFilter`,
+  `MedianExponentialFilter`, `HampelFilter`, and `HampelExponentialFilter`.
+- `SampleFilter` is now a backwards-compatible alias for
+  `MedianExponentialFilter`.
+- `hx711_server.py` gained a `--filter` selector with `none`, `median`, `ema`,
+  `median-ema`, `hampel`, and `hampel-ema` choices, plus Hampel tuning options.
+- Existing `--filter-cutoff` usage still selects `median-ema`.
+- `--filter-window` was added as the preferred name for `--filter-median-window`.
+- `example_client.py` now estimates sample rate from timestamps instead of
+  de-duplicating repeated weights, so filtered/stable loads report the correct
+  rate.
+
 ## 2026-11-20
 
 - Added `PigpioHX711`, an optional backend that uses pigpio daemon waveforms for

@@ -1,5 +1,7 @@
 import datetime
 
+import pytest
+
 import example_client
 from example_client import (
     calculate_sample_rate,
@@ -9,7 +11,7 @@ from example_client import (
 )
 
 
-def test_calculate_sample_rate_counts_unique_values():
+def test_calculate_sample_rate_uses_timestamps_not_unique_weights():
     samples = [
         {"ts": 10.0, "weight": 1.0},
         {"ts": 10.25, "weight": 1.0},
@@ -17,21 +19,21 @@ def test_calculate_sample_rate_counts_unique_values():
         {"ts": 10.75, "weight": 3.0},
     ]
 
-    assert calculate_sample_rate(samples) == 4.0
+    assert calculate_sample_rate(samples) == pytest.approx(4.0)
 
 
-def test_calculate_sample_rate_requires_multiple_unique_samples():
+def test_calculate_sample_rate_counts_repeated_weights():
+    samples = [
+        {"ts": 10.0 + (index * 0.1), "weight": 5.0}
+        for index in range(11)
+    ]
+
+    assert calculate_sample_rate(samples) == pytest.approx(10.0)
+
+
+def test_calculate_sample_rate_requires_multiple_valid_timestamps():
     assert calculate_sample_rate([]) is None
     assert calculate_sample_rate([{"ts": 10.0, "weight": 1.0}]) is None
-    assert (
-        calculate_sample_rate(
-            [
-                {"ts": 10.0, "weight": 1.0},
-                {"ts": 10.5, "weight": 1.0},
-            ]
-        )
-        is None
-    )
     assert (
         calculate_sample_rate(
             [
@@ -41,6 +43,26 @@ def test_calculate_sample_rate_requires_multiple_unique_samples():
         )
         is None
     )
+    assert (
+        calculate_sample_rate(
+            [
+                {"weight": 1.0},
+                {"ts": 10.5, "weight": 1.0},
+            ]
+        )
+        is None
+    )
+
+
+def test_calculate_sample_rate_skips_invalid_timestamps():
+    samples = [
+        {"ts": 0.0, "weight": 1.0},
+        {"ts": float("nan"), "weight": 1.0},
+        {"ts": 10.0, "weight": 1.0},
+        {"ts": 10.5, "weight": 1.0},
+    ]
+
+    assert calculate_sample_rate(samples) == pytest.approx(2.0)
 
 
 def test_format_reading_includes_sample_rate():
@@ -131,7 +153,7 @@ def test_stream_serial_prints_samples_and_estimates_rate(monkeypatch, capsys):
     lines = capsys.readouterr().out.splitlines()
     assert lines[0] == "Reading from /dev/ttyACM0"
     assert lines[1].endswith("1.000 kg  rate n/a")
-    assert lines[2].endswith("2.000 kg  rate 8.00 Hz")
+    assert lines[2].endswith("2.000 kg  rate 4.00 Hz")
 
 
 def test_stream_serial_waits_for_a_complete_line(monkeypatch, capsys):

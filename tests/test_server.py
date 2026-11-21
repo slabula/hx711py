@@ -1,8 +1,16 @@
+import math
 import threading
 
 import pytest
 
-from hx711 import HX711
+from hx711 import (
+    ExponentialFilter,
+    HampelExponentialFilter,
+    HampelFilter,
+    HX711,
+    MedianExponentialFilter,
+    MedianFilter,
+)
 from hx711_server import (
     DEFAULT_SERIAL_BAUDRATE,
     HISTORY_SIZE,
@@ -94,7 +102,9 @@ def test_reading_history_is_thread_safe():
 def test_filter_is_disabled_by_default():
     args = parse_args([])
 
+    assert args.filter == "none"
     assert args.filter_sample_rate == 80.0
+    assert args.filter_window == 5
     assert args.filter_median_window == 5
     assert args.gpio == "rpi"
     assert build_sample_filter(args) is None
@@ -147,6 +157,87 @@ def test_invalid_filter_settings_raise_value_error(argv, match):
 
     with pytest.raises(ValueError, match=match):
         build_sample_filter(args)
+
+
+def test_legacy_cutoff_selects_median_ema_filter():
+    args = parse_args(["--filter-cutoff", "5.5"])
+
+    assert args.filter == "median-ema"
+
+    sample_filter = build_sample_filter(args)
+
+    assert isinstance(sample_filter, MedianExponentialFilter)
+
+
+def test_median_filter_can_be_selected_without_a_cutoff():
+    args = parse_args(["--filter", "median", "--filter-window", "3"])
+    sample_filter = build_sample_filter(args)
+
+    assert isinstance(sample_filter, MedianFilter)
+    assert sample_filter._window == 3
+
+
+def test_ema_filter_requires_a_cutoff():
+    args = parse_args(["--filter", "ema"])
+
+    with pytest.raises(ValueError, match="--filter-cutoff"):
+        build_sample_filter(args)
+
+
+def test_ema_filter_is_built_from_cutoff_and_sample_rate():
+    sample_filter = build_sample_filter(
+        parse_args(
+            ["--filter", "ema", "--filter-cutoff", "5.5", "--filter-sample-rate", "100"]
+        )
+    )
+
+    assert isinstance(sample_filter, ExponentialFilter)
+    assert sample_filter._sample_frequency_hz == 100.0
+    assert sample_filter._cutoff_frequency_hz == 5.5
+
+
+def test_hampel_filter_settings_are_parsed():
+    args = parse_args(
+        [
+            "--filter",
+            "hampel",
+            "--filter-window",
+            "9",
+            "--filter-mad-threshold",
+            "4",
+            "--filter-min-mad",
+            "0.5",
+        ]
+    )
+    sample_filter = build_sample_filter(args)
+
+    assert isinstance(sample_filter, HampelFilter)
+    assert sample_filter._window == 9
+    assert sample_filter._threshold == 4.0
+    assert sample_filter._min_mad == 0.5
+
+
+def test_hampel_ema_filter_uses_cutoff_and_hampel_settings():
+    sample_filter = build_sample_filter(
+        parse_args(
+            [
+                "--filter",
+                "hampel-ema",
+                "--filter-cutoff",
+                "5",
+                "--filter-window",
+                "7",
+                "--filter-mad-threshold",
+                "2.5",
+            ]
+        )
+    )
+
+    assert isinstance(sample_filter, HampelExponentialFilter)
+    assert sample_filter._alpha == pytest.approx(
+        1.0 - math.exp(-2.0 * math.pi * 5.0 / 80.0)
+    )
+    assert sample_filter._hampel._threshold == 2.5
 
 
 class StopAfterOneRead:

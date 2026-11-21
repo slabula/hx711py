@@ -14,9 +14,8 @@ python example_client.py --url http://raspberrypi.local:8080/weight
 ```
 
 The client also prints the sample rate estimated from the server's `samples`
-list. Repeated `weight` values are counted once, and the remaining unique sample
-count is divided by the timestamp span. Servers that do not provide samples
-show `rate n/a`.
+list. It uses all sample timestamps, so repeated `weight` values still count as
+samples. Servers that do not provide samples show `rate n/a`.
 
 `GET /weight` (or `GET /`) returns:
 
@@ -60,18 +59,37 @@ authentication, so only expose it on a trusted network.
 | `--unit` | `units` | Unit label reported to clients |
 | `--serial` | disabled | Also stream `timestamp,weight` lines to this device |
 | `--serial-baudrate` | `115200` | Serial baud rate (ignored by USB ACM) |
-| `--filter-cutoff` | disabled | Enable the low-pass filter at this cutoff in Hz |
+| `--filter` | automatic | `none`, `median`, `ema`, `median-ema`, `hampel`, or `hampel-ema` |
+| `--filter-cutoff` | disabled | Low-pass cutoff in Hz for `ema`, `median-ema`, and `hampel-ema` |
 | `--filter-sample-rate` | `80` | Expected sample rate for filtering, in Hz |
-| `--filter-median-window` | `5` | Median window size |
+| `--filter-window`, `--filter-median-window` | `5` | Window size for median-based filters |
+| `--filter-mad-threshold` | `3.0` | Hampel MAD threshold |
+| `--filter-mad-scale` | `1.4826` | Hampel MAD scale factor |
+| `--filter-min-mad` | `0` | Absolute minimum Hampel rejection limit |
 
-To enable filtering:
+## Filtering
+
+Select a filter with `--filter`:
 
 ```bash
-python hx711_server.py --m 0.000018 --c -2.5 --filter-cutoff 5 --filter-sample-rate 80
+# Pure median, no low-pass smoothing
+python hx711_server.py --filter median --filter-window 5
+
+# Exponential low-pass only
+python hx711_server.py --filter ema --filter-cutoff 5 --filter-sample-rate 80
+
+# Original median + EMA behavior
+python hx711_server.py --filter median-ema --filter-cutoff 5 --filter-sample-rate 80
+
+# Hampel outlier rejection followed by EMA
+python hx711_server.py --filter hampel-ema --filter-cutoff 5 \
+  --filter-window 7 --filter-mad-threshold 3.0
 ```
 
-Set `--filter-sample-rate` to the actual read rate for your hardware. Without
-`--filter-cutoff`, readings are unfiltered.
+For compatibility, supplying `--filter-cutoff` without `--filter` still selects
+`median-ema`. Without a filter and without `--filter-cutoff`, readings are
+unfiltered. Set `--filter-sample-rate` to the actual read rate for your
+hardware. See [API reference](api.md#filtering) for the Python filter classes.
 
 ## Related guides
 

@@ -55,36 +55,59 @@ options.
 
 ## Filtering
 
-`SampleFilter` smooths calibrated readings. It takes the median of the last few
-samples to reject spikes, then applies a first-order low-pass filter:
+Filters are small objects with `sample(value)` and `reset()`. Attach one with
+`HX711.set_filter()`; `set_m()` and `set_c()` reset it automatically.
+
+| Filter | Description |
+| --- | --- |
+| `NoFilter` | Pass samples through unchanged. |
+| `MedianFilter(window=5)` | Return the rolling median. Rejects spikes without smoothing. |
+| `ExponentialFilter(sample_rate_hz, cutoff_hz)` | First-order low-pass filter only. Smooths noise but passes large spikes. |
+| `MedianExponentialFilter(sample_rate_hz, cutoff_hz, median_window=5)` | Median then low-pass filter. The original behavior, also exported as `SampleFilter`. |
+| `HampelFilter(window=7, threshold=3.0, min_mad=0.0, mad_scale=1.4826)` | Replace outliers with the rolling median based on median absolute deviation. |
+| `HampelExponentialFilter(...)` | Hampel outlier rejection followed by the exponential low-pass filter. |
 
 ```python
-from hx711 import HX711, SampleFilter
+from hx711 import HX711, MedianFilter
 
 hx = HX711(5, 6)
 hx.set_m(m)
 hx.set_c(c)
-hx.set_filter(SampleFilter(80.0, 10.0))
+hx.set_filter(MedianFilter(5))
 weight = hx.read_weight()
 ```
 
-The first argument is the actual sample rate in Hz and the second is the desired
-cutoff in Hz. `median_window` defaults to 5.
+`SampleFilter` remains a backwards-compatible alias for
+`MedianExponentialFilter`:
 
-The smoothing coefficient is:
+```python
+from hx711 import SampleFilter
+
+hx.set_filter(SampleFilter(80.0, 10.0))
+```
+
+The exponential stage uses an exponential cutoff mapping:
 
 ```text
 alpha = 1 - exp(-2 * pi * cutoff * dt)
 ```
 
-This exponential mapping gives a cutoff much closer to the requested value than
-the backward-Euler approximation, though it can drift slightly when the cutoff
-is a large fraction of the sample rate.
+This gives a cutoff much closer to the requested value than the backward-Euler
+approximation, though it can drift slightly when the cutoff is a large fraction
+of the sample rate.
+
+`HampelFilter` includes the current sample in its window. A sample is replaced
+with the window median when its deviation exceeds
+`max(min_mad, threshold * MAD * mad_scale)`. `mad_scale` defaults to 1.4826 so
+MAD estimates the standard deviation of normally distributed noise. If MAD is
+zero, `min_mad` provides an absolute floor so small normal changes are not
+always rejected.
 
 Make sure the sample rate matches your setup. The HX711 normally runs at 10 SPS,
 or 80 SPS with RATE tied high; `measure_sample_rate.py` reports the rate you
-actually achieve. `SampleFilter.reset()` clears the filter state, and `set_m()`
-and `set_c()` reset an attached filter automatically.
+actually achieve. Every filter has `reset()`, and `set_m()` and `set_c()` reset
+an attached filter automatically. See [HTTP server](server.md#filtering) for the
+server CLI selector.
 
 ## Sample rate
 

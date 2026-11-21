@@ -107,27 +107,34 @@ def parse_serial_line(line):
 
 
 def calculate_sample_rate(samples):
+    """Estimate rate from sample timestamps.
+
+    Repeated weights are legitimate samples, so they must not be discarded.
+    """
     if not samples:
         return None
 
-    unique_samples = []
-    seen_values = set()
+    timestamps = []
     for sample in samples:
-        value = sample.get("weight")
-        if value in seen_values:
+        ts = sample.get("ts")
+        if (
+            not isinstance(ts, (int, float))
+            or isinstance(ts, bool)
+            or not math.isfinite(ts)
+            or ts <= 0
+        ):
             continue
-        seen_values.add(value)
-        unique_samples.append(sample)
+        timestamps.append(ts)
 
-    if len(unique_samples) < 2:
+    if len(timestamps) < 2:
         return None
 
-    first = unique_samples[0].get("ts")
-    last = unique_samples[-1].get("ts")
-    if first is None or last is None or last <= first:
+    first = min(timestamps)
+    last = max(timestamps)
+    if last <= first:
         return None
 
-    return len(unique_samples) / (last - first)
+    return (len(timestamps) - 1) / (last - first)
 
 
 def format_reading(reading):

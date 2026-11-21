@@ -15,9 +15,9 @@ The tests run without Raspberry Pi hardware by using the fake GPIO/HX711.
 | --- | --- |
 | `hx711/core.py` | Main `HX711` implementation |
 | `hx711/pigpio_hx711.py` | Optional pigpio hardware-timed backend |
-| `hx711/sample_filter.py` | Median + exponential-moving-average filter |
+| `hx711/sample_filter.py` | No-op, median, exponential, median+EMA, and Hampel filters |
 | `hx711/fake_gpio.py`, `hx711/fake_hx711.py` | Fake GPIO/HX711 for development |
-| `hx711/__init__.py` | Package exports: `HX711`, `SampleFilter` |
+| `hx711/__init__.py` | Package exports: `HX711`, `PigpioHX711`, and all filter classes |
 | `example.py` | Calibrated, filtered reading example |
 | `example_emulator.py` | Explicit emulator example |
 | `calibrate_sensor.py` | Interactive calibration helper |

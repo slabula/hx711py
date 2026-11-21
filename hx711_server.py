@@ -18,7 +18,14 @@ import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from socketserver import ThreadingMixIn
 
-from hx711 import HX711, SampleFilter
+from hx711 import (
+    ExponentialFilter,
+    HampelExponentialFilter,
+    HampelFilter,
+    HX711,
+    MedianExponentialFilter,
+    MedianFilter,
+)
 
 
 DEFAULT_HOST = "0.0.0.0"
@@ -26,7 +33,19 @@ DEFAULT_PORT = 8080
 DEFAULT_DOUT_PIN = 5
 DEFAULT_PD_SCK_PIN = 6
 DEFAULT_FILTER_SAMPLE_RATE_HZ = 80.0
-DEFAULT_FILTER_MEDIAN_WINDOW = 5
+DEFAULT_FILTER_WINDOW = 5
+DEFAULT_FILTER_MEDIAN_WINDOW = DEFAULT_FILTER_WINDOW
+DEFAULT_HAMPEL_MAD_THRESHOLD = 3.0
+DEFAULT_HAMPEL_MAD_SCALE = 1.4826
+DEFAULT_HAMPEL_MIN_MAD = 0.0
+FILTER_CHOICES = (
+    "none",
+    "median",
+    "ema",
+    "median-ema",
+    "hampel",
+    "hampel-ema",
+)
 HISTORY_SIZE = 100
 READ_TIMEOUT_SECONDS = 0.5
 READER_JOIN_TIMEOUT_SECONDS = 1.0
@@ -240,37 +259,127 @@ def parse_args(argv=None):
         help="serial baud rate (default: %(default)s; ignored by USB ACM)",
     )
     parser.add_argument(
+        "--filter",
+        choices=FILTER_CHOICES,
+        default=None,
+        help=(
+            "filter type: none, median, ema, median-ema, hampel, or hampel-ema "
+            "(default: median-ema when --filter-cutoff is set, otherwise none)"
+        ),
+    )
+    parser.add_argument(
         "--filter-cutoff",
         type=float,
         metavar="HZ",
-        help="enable the low-pass filter with this cutoff in Hz (default: disabled)",
+        help=(
+            "low-pass cutoff in Hz for ema, median-ema, and hampel-ema; "
+            "supplying it without --filter selects median-ema for compatibility"
+        ),
     )
     parser.add_argument(
         "--filter-sample-rate",
         type=float,
         default=DEFAULT_FILTER_SAMPLE_RATE_HZ,
         metavar="HZ",
-        help="sample rate for filtering in Hz, used with --filter-cutoff (default: %(default)s)",
+        help="sample rate for filtering in Hz (default: %(default)s)",
     )
     parser.add_argument(
+        "--filter-window",
         "--filter-median-window",
+        dest="filter_window",
         type=int,
-        default=DEFAULT_FILTER_MEDIAN_WINDOW,
+        default=DEFAULT_FILTER_WINDOW,
         metavar="N",
-        help="median window size, used with --filter-cutoff (default: %(default)s)",
+        help="window size for median, median-ema, hampel, and hampel-ema (default: %(default)s)",
     )
-    return parser.parse_args(argv)
+    parser.add_argument(
+        "--filter-mad-threshold",
+        type=float,
+        default=DEFAULT_HAMPEL_MAD_THRESHOLD,
+        metavar="N",
+        help="Hampel MAD threshold (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--filter-mad-scale",
+        type=float,
+        default=DEFAULT_HAMPEL_MAD_SCALE,
+        metavar="N",
+        help="Hampel MAD scale factor (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--filter-min-mad",
+        type=float,
+        default=DEFAULT_HAMPEL_MIN_MAD,
+        metavar="N",
+        help="absolute minimum Hampel rejection limit (default: %(default)s)",
+    )
+
+    args = parser.parse_args(argv)
+
+    # Backwards compatibility with code that reads this attribute directly.
+    args.filter_median_window = args.filter_window
+
+    if args.filter is None:
+        if args.filter_cutoff is not None:
+            args.filter = "median-ema"
+        else:
+            args.filter = "none"
+
+    return args
+
+
+def _filter_cutoff(args, filter_name):
+    if args.filter_cutoff is None:
+        raise ValueError("--filter {} requires --filter-cutoff".format(filter_name))
+    return args.filter_cutoff
 
 
 def build_sample_filter(args):
-    if args.filter_cutoff is None:
+    filter_name = getattr(args, "filter", None)
+    if filter_name is None:
+        filter_name = "median-ema" if args.filter_cutoff is not None else "none"
+
+    if filter_name == "none":
         return None
 
-    return SampleFilter(
-        sample_frequency_hz=args.filter_sample_rate,
-        cutoff_frequency_hz=args.filter_cutoff,
-        median_window=args.filter_median_window,
+    window = getattr(
+        args, "filter_window", getattr(args, "filter_median_window", DEFAULT_FILTER_WINDOW)
     )
+
+    if filter_name == "median":
+        return MedianFilter(window=window)
+
+    if filter_name == "ema":
+        return ExponentialFilter(
+            sample_frequency_hz=args.filter_sample_rate,
+            cutoff_frequency_hz=_filter_cutoff(args, filter_name),
+        )
+
+    if filter_name == "median-ema":
+        return MedianExponentialFilter(
+            sample_frequency_hz=args.filter_sample_rate,
+            cutoff_frequency_hz=_filter_cutoff(args, filter_name),
+            median_window=window,
+        )
+
+    hampel_kwargs = {
+        "window": window,
+        "threshold": args.filter_mad_threshold,
+        "min_mad": args.filter_min_mad,
+        "mad_scale": args.filter_mad_scale,
+    }
+
+    if filter_name == "hampel":
+        return HampelFilter(**hampel_kwargs)
+
+    if filter_name == "hampel-ema":
+        return HampelExponentialFilter(
+            sample_frequency_hz=args.filter_sample_rate,
+            cutoff_frequency_hz=_filter_cutoff(args, filter_name),
+            **hampel_kwargs
+        )
+
+    raise ValueError("unknown filter type: {!r}".format(filter_name))
 
 
 def build_hx711(args):
