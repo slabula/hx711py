@@ -4,8 +4,10 @@ import pytest
 
 from hx711 import HX711
 from hx711_server import (
+    DEFAULT_SERIAL_BAUDRATE,
     HISTORY_SIZE,
     READER_JOIN_TIMEOUT_SECONDS,
+    CsvSerialPublisher,
     ReadingHistory,
     build_hx711,
     build_sample_filter,
@@ -229,3 +231,93 @@ def test_stop_reader_and_cleanup_skips_cleanup_if_reader_is_alive():
     assert stopped is False
     assert stop_event.is_set()
     assert hx.cleaned is False
+
+
+class RecordingPort:
+    def __init__(self, write_error=None):
+        self.writes = []
+        self.closed = False
+        self.write_error = write_error
+
+    def write(self, data):
+        if self.write_error is not None:
+            raise self.write_error
+        self.writes.append(data)
+
+    def close(self):
+        self.closed = True
+
+
+def test_csv_serial_publisher_writes_timestamp_and_weight():
+    port = RecordingPort()
+    publisher = CsvSerialPublisher(port)
+
+    publisher.publish(1.25, 12.5)
+    publisher.close()
+
+    assert port.writes == [b"1.25,12.5\n"]
+    assert port.closed is True
+
+
+def test_csv_serial_publisher_drops_failed_writes(capsys):
+    port = RecordingPort(write_error=OSError("device gone"))
+    publisher = CsvSerialPublisher(port)
+
+    publisher.publish(1.0, 2.0)
+    publisher.publish(3.0, 4.0)
+
+    assert port.writes == []
+    assert "dropping samples" in capsys.readouterr().err
+
+
+def test_parse_args_serial_defaults():
+    args = parse_args([])
+
+    assert args.serial is None
+    assert args.serial_baudrate == DEFAULT_SERIAL_BAUDRATE
+
+    args = parse_args(["--serial", "/dev/ttyGS0", "--serial-baudrate", "9600"])
+
+    assert args.serial == "/dev/ttyGS0"
+    assert args.serial_baudrate == 9600
+
+
+class StopAfterTwoReads:
+    def __init__(self, stop_event):
+        self.stop_event = stop_event
+        self.values = iter([1.0, 2.0])
+
+    def read_weight(self, timeout_seconds=0.5):
+        try:
+            return next(self.values)
+        except StopIteration:
+            self.stop_event.set()
+            return None
+
+
+def test_read_forever_publishes_each_sample():
+    stop_event = threading.Event()
+    hx = StopAfterTwoReads(stop_event)
+    reading = ReadingHistory()
+    port = RecordingPort()
+    publisher = CsvSerialPublisher(port)
+
+    read_forever(hx, reading, "kg", stop_event, publisher)
+
+    assert len(port.writes) == 2
+    assert port.writes[0].endswith(b",1.0\n")
+    assert port.writes[1].endswith(b",2.0\n")
+    assert [sample["weight"] for sample in reading.get()["samples"]] == [1.0, 2.0]
+
+
+def test_stop_reader_and_cleanup_closes_publisher():
+    stop_event = threading.Event()
+    read_thread = FakeReaderThread(alive_after_join=False)
+    hx = CleanupRecorder()
+    port = RecordingPort()
+    publisher = CsvSerialPublisher(port)
+
+    stopped = stop_reader_and_cleanup(read_thread, stop_event, hx, publisher)
+
+    assert stopped is True
+    assert port.closed is True

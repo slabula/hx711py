@@ -8,6 +8,7 @@ setup(
     extras_require={
         'rpi': ['RPi.GPIO'],
         'pigpio': ['pigpio'],
+        'serial': ['pyserial'],
         'dev': ['pytest'],
     },
     python_requires='>=3',
