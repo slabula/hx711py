@@ -55,10 +55,12 @@ own fake GPIO/HX711 emulator.
 # HTTP JSON server
 python hx711_server.py --unit kg --m 0.000018 --c -2.5
 python example_client.py --url http://raspberrypi.local:8080/weight
+python example_client.py --url http://raspberrypi.local:8080/weight --csv samples.csv
 
 # Pi Zero W USB serial stream
 python hx711_server.py --serial /dev/ttyGS0 --unit kg --m 0.000018 --c -2.5
 python example_client.py --serial /dev/ttyACM0 --unit kg
+python example_client.py --serial /dev/ttyACM0 --unit kg --csv samples.csv
 ```
 
 See [HTTP server](docs/server.md) and [USB serial streaming](docs/usb-serial.md)

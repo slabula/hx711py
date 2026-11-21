@@ -1,12 +1,16 @@
 import datetime
+import sys
 
 import pytest
 
 import example_client
 from example_client import (
+    CsvSampleWriter,
     calculate_sample_rate,
     format_reading,
+    parse_args,
     parse_serial_line,
+    poll_http,
     stream_serial,
 )
 
@@ -169,3 +173,124 @@ def test_stream_serial_waits_for_a_complete_line(monkeypatch, capsys):
     lines = capsys.readouterr().out.splitlines()
     assert len(lines) == 2
     assert lines[1].endswith("1.000  rate n/a")
+
+
+def test_csv_option_is_parsed(monkeypatch):
+    monkeypatch.setattr(sys, "argv", ["example_client.py", "--csv", "samples.csv"])
+
+    assert parse_args().csv == "samples.csv"
+
+
+def test_csv_writer_writes_header_and_valid_samples(tmp_path):
+    path = tmp_path / "samples.csv"
+    writer = CsvSampleWriter(str(path))
+
+    assert writer.write({"ts": 10.0, "weight": 1.5}) is True
+    assert writer.write({"ts": 10.25, "weight": float("nan")}) is False
+    assert writer.write({"ts": 10.5, "weight": 2.5}, deduplicate=True) is True
+    assert writer.write({"ts": 10.5, "weight": 2.5}, deduplicate=True) is False
+
+    writer.close()
+
+    assert path.read_text().splitlines() == [
+        "timestamp,weight",
+        "10.0,1.5",
+        "10.5,2.5",
+    ]
+
+
+def test_csv_writer_appends_without_repeating_header(tmp_path):
+    path = tmp_path / "samples.csv"
+    path.write_text("timestamp,weight\n10.0,1.0\n")
+
+    writer = CsvSampleWriter(str(path))
+    writer.write({"ts": 10.25, "weight": 2.0})
+    writer.close()
+
+    assert path.read_text().splitlines() == [
+        "timestamp,weight",
+        "10.0,1.0",
+        "10.25,2.0",
+    ]
+
+
+def test_poll_http_writes_each_history_sample_once(monkeypatch, tmp_path):
+    payload = {
+        "ts": 10.25,
+        "weight": 2.0,
+        "samples": [
+            {"ts": 10.0, "weight": 1.0},
+            {"ts": 10.25, "weight": 2.0},
+        ],
+    }
+    polls = [payload, payload]
+
+    def fake_fetch(url, timeout):
+        if not polls:
+            raise KeyboardInterrupt
+        return polls.pop(0)
+
+    monkeypatch.setattr(example_client, "fetch", fake_fetch)
+    monkeypatch.setattr(example_client.time, "sleep", lambda seconds: None)
+
+    path = tmp_path / "http.csv"
+    writer = CsvSampleWriter(str(path))
+    try:
+        poll_http("http://example.test/weight", 0.1, 1.0, writer)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        writer.close()
+
+    assert path.read_text().splitlines() == [
+        "timestamp,weight",
+        "10.0,1.0",
+        "10.25,2.0",
+    ]
+
+
+def test_poll_http_writes_latest_reading_without_samples(monkeypatch, tmp_path):
+    polls = [{"ts": 10.0, "weight": 1.0}]
+
+    def fake_fetch(url, timeout):
+        if not polls:
+            raise KeyboardInterrupt
+        return polls.pop(0)
+
+    monkeypatch.setattr(example_client, "fetch", fake_fetch)
+    monkeypatch.setattr(example_client.time, "sleep", lambda seconds: None)
+
+    path = tmp_path / "http.csv"
+    writer = CsvSampleWriter(str(path))
+    try:
+        poll_http("http://example.test/weight", 0.1, 1.0, writer)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        writer.close()
+
+    assert path.read_text().splitlines() == ["timestamp,weight", "10.0,1.0"]
+
+
+def test_stream_serial_writes_every_sample_to_csv(monkeypatch, tmp_path):
+    port = FakeSerialPort(
+        [b"10.0,1.0\n", b"10.25,2.0\n", b"10.25,2.0\n"]
+    )
+    module = FakeSerialModule(port)
+    monkeypatch.setattr(example_client, "import_serial_module", lambda: module)
+
+    path = tmp_path / "serial.csv"
+    writer = CsvSampleWriter(str(path))
+    try:
+        stream_serial("/dev/ttyACM0", 115200, 1.0, "kg", writer)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        writer.close()
+
+    assert path.read_text().splitlines() == [
+        "timestamp,weight",
+        "10.0,1.0",
+        "10.25,2.0",
+        "10.25,2.0",
+    ]

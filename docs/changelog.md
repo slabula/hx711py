@@ -13,6 +13,8 @@
 - `example_client.py` now estimates sample rate from timestamps instead of
   de-duplicating repeated weights, so filtered/stable loads report the correct
   rate.
+- Added `--csv FILE` to `example_client.py` for appending `timestamp,weight`
+  samples in both HTTP and serial modes.
 
 ## 2026-11-20
 

@@ -17,6 +17,17 @@ The client also prints the sample rate estimated from the server's `samples`
 list. It uses all sample timestamps, so repeated `weight` values still count as
 samples. Servers that do not provide samples show `rate n/a`.
 
+Use `--csv FILE` to append `timestamp,weight` rows to a CSV file:
+
+```bash
+python example_client.py --url http://raspberrypi.local:8080/weight --csv samples.csv
+python example_client.py --serial /dev/ttyACM0 --unit kg --csv samples.csv
+```
+
+The file gets a `timestamp,weight` header when it is created. HTTP mode writes
+each history sample once even though consecutive polls overlap; serial mode
+writes every valid line as received.
+
 `GET /weight` (or `GET /`) returns:
 
 ```json
