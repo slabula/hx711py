@@ -1,10 +1,14 @@
 #! /usr/bin/python3
 
 """
-Poll an hx711_server.py instance and print timestamp/weight/sample-rate values.
+Read an hx711_server.py instance and print timestamp/weight/sample-rate values.
+
+By default this polls the HTTP /weight endpoint. With --serial it instead reads
+"timestamp,weight" lines from a USB ACM device such as /dev/ttyACM0.
 """
 
 import argparse
+import collections
 import datetime
 import json
 import time
@@ -15,10 +19,15 @@ import urllib.request
 DEFAULT_URL = "http://raspberrypi.local:8080/weight"
 DEFAULT_INTERVAL = 0.5
 DEFAULT_TIMEOUT = 2.0
+DEFAULT_SERIAL_BAUDRATE = 115200
+DEFAULT_SERIAL_RETRY_SECONDS = 1.0
+SERIAL_HISTORY_SIZE = 100
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Poll an HX711 HTTP server.")
+    parser = argparse.ArgumentParser(
+        description="Read HX711 samples over HTTP or a USB serial device."
+    )
     parser.add_argument(
         "--url",
         default=DEFAULT_URL,
@@ -34,7 +43,23 @@ def parse_args():
         "--timeout",
         type=float,
         default=DEFAULT_TIMEOUT,
-        help="request timeout in seconds (default: %(default)s)",
+        help="request/serial timeout in seconds (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--serial",
+        metavar="DEVICE",
+        help="read 'timestamp,weight' lines from DEVICE instead of HTTP",
+    )
+    parser.add_argument(
+        "--serial-baudrate",
+        type=int,
+        default=DEFAULT_SERIAL_BAUDRATE,
+        metavar="BAUD",
+        help="serial baud rate (default: %(default)s; ignored by USB ACM)",
+    )
+    parser.add_argument(
+        "--unit",
+        help="unit label to print for serial samples (not sent on the wire)",
     )
     return parser.parse_args()
 
@@ -45,6 +70,22 @@ def fetch(url, timeout):
         return json.loads(response.read().decode("utf-8"))
     finally:
         response.close()
+
+
+def import_serial_module():
+    try:
+        import serial
+    except ImportError:
+        raise SystemExit("error: --serial requires pyserial (pip install pyserial)")
+    return serial
+
+
+def parse_serial_line(line):
+    """Parse one 'timestamp,weight' line from the server's serial stream."""
+    parts = line.decode("utf-8", errors="replace").strip().split(",")
+    if len(parts) != 2:
+        raise ValueError("expected 'timestamp,weight'")
+    return float(parts[0]), float(parts[1])
 
 
 def calculate_sample_rate(samples):
@@ -91,23 +132,71 @@ def format_reading(reading):
     return text
 
 
+def poll_http(url, interval, timeout):
+    while True:
+        try:
+            reading = fetch(url, timeout)
+            print(format_reading(reading))
+        except urllib.error.HTTPError as exc:
+            if exc.code == 503:
+                print("Waiting for the first reading...")
+            else:
+                print("HTTP error: {}".format(exc))
+        except Exception as exc:
+            print("Error: {}".format(exc))
+
+        time.sleep(interval)
+
+
+def stream_serial(path, baudrate, timeout, unit):
+    serial = import_serial_module()
+    history = collections.deque(maxlen=SERIAL_HISTORY_SIZE)
+    port = None
+
+    print("Reading from {}".format(path))
+    while True:
+        try:
+            if port is None:
+                port = serial.Serial(path, baudrate, timeout=timeout)
+
+            line = port.readline()
+            if not line:
+                continue
+
+            try:
+                ts, weight = parse_serial_line(line)
+            except ValueError:
+                continue
+
+            sample = {"ts": ts, "weight": weight}
+            if unit:
+                sample["unit"] = unit
+            history.append(sample)
+
+            reading = dict(sample)
+            reading["samples"] = list(history)
+            print(format_reading(reading))
+        except KeyboardInterrupt:
+            raise
+        except Exception as exc:
+            print("Serial error: {}".format(exc))
+            if port is not None:
+                try:
+                    port.close()
+                except Exception:
+                    pass
+                port = None
+            time.sleep(DEFAULT_SERIAL_RETRY_SECONDS)
+
+
 def main():
     args = parse_args()
 
     try:
-        while True:
-            try:
-                reading = fetch(args.url, args.timeout)
-                print(format_reading(reading))
-            except urllib.error.HTTPError as exc:
-                if exc.code == 503:
-                    print("Waiting for the first reading...")
-                else:
-                    print("HTTP error: {}".format(exc))
-            except Exception as exc:
-                print("Error: {}".format(exc))
-
-            time.sleep(args.interval)
+        if args.serial:
+            stream_serial(args.serial, args.serial_baudrate, args.timeout, args.unit)
+        else:
+            poll_http(args.url, args.interval, args.timeout)
     except KeyboardInterrupt:
         print("\nBye!")
 
