@@ -125,5 +125,6 @@ finally:
 Without calibration, `m=1.0` and `c=0.0`, so `read_weight()` returns the raw
 value.
 
-On a machine without `RPi.GPIO`, the library automatically uses the fake
-GPIO/HX711 emulator and prints a message when imported. See [Emulator](emulator.md).
+On a machine without `RPi.GPIO`, each `HX711` instance automatically gets its
+own fake GPIO/HX711 emulator. To feed it known samples, inject a `FakeHx711`
+through `gpio_module` as shown in [Emulator](emulator.md).

@@ -8,21 +8,10 @@ from .fake_gpio import FakeGpio
 
 try:
     from RPi import GPIO
-except ModuleNotFoundError:
-    print("No RPi package, simulating GPIO connected to fake HX711.")
-    FAKE_HX711 = FakeHx711()
-
-    m = 6.755387341782463e-05
-    c = -0.03626955667860976
-
-    for x in range(100):
-        FAKE_HX711.inject_float_samples([float(x)], m, c)
-
-    #FAKE_HX711.inject_raw_samples([2000] * 100)    # 0kg
-    FAKE_HX711.inject_raw_samples([140900] * 100)  # 10kg
-    FAKE_HX711.inject_raw_samples([696500] * 100)  # 50kg
-
-    GPIO = FakeGpio(FAKE_HX711)
+except ImportError:
+    # No real GPIO available. Each HX711 instance gets its own fake device in
+    # __init__ so multiple readers never share pin state.
+    GPIO = None
 
 
 def twos_complement_24bit_to_int(input_value):
@@ -56,7 +45,12 @@ class HX711:
         self._gpio = gpio_module
 
         if self._gpio is None:
-            self._gpio = GPIO
+            if GPIO is None:
+                fake_device = FakeHx711()
+                self._gpio = FakeGpio(fake_device)
+                self._gpio.add_device(dout, pd_sck, fake_device)
+            else:
+                self._gpio = GPIO
 
         self._pd_sck = pd_sck
         self._dout = dout

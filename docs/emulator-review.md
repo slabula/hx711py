@@ -19,7 +19,8 @@ Verified behaviour:
 - The 25th pulse raises DOUT back to high.
 - Reset/power-up schedules a new sample and selects Channel A, Gain 128.
 - DOUT is high while no sample is ready and while powered down.
-- `FakeGpio` correctly maps the single DOUT/PD_SCK pin pair used by `HX711`.
+- `FakeGpio` tracks pin state per pin and can bind multiple DOUT/PD_SCK pairs to
+  separate `FakeHx711` devices with `add_device()`.
 
 The main issues are in power-down handling and rejected gain selections.
 
@@ -148,15 +149,15 @@ before use. The current state is not fatal, but it is not faithful to power-up.
 
 - `:95` comment says `0.0125ms`; the constant is `0.0125` seconds, i.e. 12.5 ms.
 - `:116` `_prev_clock_count` is assigned in `__init__` but never used.
-- `:118-124` `inject_float_samples()` always uses `REFERENCE_A_UNIT`, ignores
-  the otherwise unused `REFERENCE_B_UNIT`, and truncates with `int()` rather
-  than rounding.
+- `inject_float_samples()` takes explicit `m` and `c` values and truncates with
+  `int()` rather than rounding.
 - Injected raw values are not range-checked or saturated. The real HX711
   saturates at `0x7FFFFF` / `0x800000`, as noted at `:15-18`.
 - `:186` prints `Unrecognised clock count!` from library code; a warning or
   logging call would be less noisy.
-- No tests currently exercise `FakeHx711` or `FakeGpio`. `tests/test_core.py`
-  defines its own fakes, so these emulator bugs are not covered.
+- `tests/test_fake_gpio.py` now exercises `FakeGpio` pin binding and the default
+  fallback device, but `FakeHx711` timing and gain-selection behavior still need
+  dedicated tests.
 
 ## Suggested Test Cases
 

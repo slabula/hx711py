@@ -46,8 +46,8 @@ finally:
     hx.cleanup()
 ```
 
-On a machine without `RPi.GPIO`, the library automatically falls back to a fake
-GPIO/HX711 emulator.
+On a machine without `RPi.GPIO`, each `HX711` instance automatically gets its
+own fake GPIO/HX711 emulator.
 
 ## Server quick start
 
