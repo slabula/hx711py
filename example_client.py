@@ -11,6 +11,7 @@ import argparse
 import collections
 import datetime
 import json
+import math
 import time
 import urllib.error
 import urllib.request
@@ -22,6 +23,7 @@ DEFAULT_TIMEOUT = 2.0
 DEFAULT_SERIAL_BAUDRATE = 115200
 DEFAULT_SERIAL_RETRY_SECONDS = 1.0
 SERIAL_HISTORY_SIZE = 100
+MAX_SERIAL_LINE_BYTES = 1024
 
 
 def parse_args():
@@ -81,11 +83,27 @@ def import_serial_module():
 
 
 def parse_serial_line(line):
-    """Parse one 'timestamp,weight' line from the server's serial stream."""
+    """Parse one complete 'timestamp,weight' line from the serial stream.
+
+    Malformed lines, non-finite values, and non-positive timestamps raise
+    ValueError so the caller can skip them.
+    """
     parts = line.decode("utf-8", errors="replace").strip().split(",")
     if len(parts) != 2:
         raise ValueError("expected 'timestamp,weight'")
-    return float(parts[0]), float(parts[1])
+
+    try:
+        ts = float(parts[0])
+        weight = float(parts[1])
+    except ValueError:
+        raise ValueError("timestamp and weight must be floats")
+
+    if not math.isfinite(ts) or not math.isfinite(weight):
+        raise ValueError("timestamp and weight must be finite")
+    if ts <= 0:
+        raise ValueError("timestamp must be positive")
+
+    return ts, weight
 
 
 def calculate_sample_rate(samples):
@@ -154,15 +172,26 @@ def stream_serial(path, baudrate, timeout, unit):
     port = None
 
     print("Reading from {}".format(path))
+    pending = b""
     while True:
         try:
             if port is None:
                 port = serial.Serial(path, baudrate, timeout=timeout)
 
-            line = port.readline()
-            if not line:
+            chunk = port.readline()
+            if not chunk:
                 continue
 
+            pending += chunk
+            if len(pending) > MAX_SERIAL_LINE_BYTES:
+                # No newline in a long time: treat it as garbage, not a sample.
+                pending = b""
+                continue
+            if not pending.endswith(b"\n"):
+                # pyserial returns a partial line when the read timeout expires.
+                continue
+
+            line, pending = pending, b""
             try:
                 ts, weight = parse_serial_line(line)
             except ValueError:

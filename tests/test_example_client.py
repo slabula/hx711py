@@ -71,7 +71,17 @@ def test_parse_serial_line():
 
 
 def test_parse_serial_line_rejects_bad_lines():
-    for line in (b"", b"1", b"1,2,3", b"not-a-time,2"):
+    bad_lines = (
+        b"",
+        b"1",
+        b"1,2,3",
+        b"not-a-time,2",
+        b"nan,2",
+        b"1,inf",
+        b"0,2",
+        b"-1,2",
+    )
+    for line in bad_lines:
         try:
             parse_serial_line(line)
         except ValueError:
@@ -122,3 +132,18 @@ def test_stream_serial_prints_samples_and_estimates_rate(monkeypatch, capsys):
     assert lines[0] == "Reading from /dev/ttyACM0"
     assert lines[1].endswith("1.000 kg  rate n/a")
     assert lines[2].endswith("2.000 kg  rate 8.00 Hz")
+
+
+def test_stream_serial_waits_for_a_complete_line(monkeypatch, capsys):
+    port = FakeSerialPort([b"10.0,1.", b"0\n"])
+    module = FakeSerialModule(port)
+    monkeypatch.setattr(example_client, "import_serial_module", lambda: module)
+
+    try:
+        stream_serial("/dev/ttyACM0", 115200, 1.0, None)
+    except KeyboardInterrupt:
+        pass
+
+    lines = capsys.readouterr().out.splitlines()
+    assert len(lines) == 2
+    assert lines[1].endswith("1.000  rate n/a")

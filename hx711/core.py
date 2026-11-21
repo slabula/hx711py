@@ -7,7 +7,7 @@ from .fake_hx711 import FakeHx711
 from .fake_gpio import FakeGpio
 
 try:
-    import RPi.GPIO as GPIO
+    from RPi import GPIO
 except ModuleNotFoundError:
     print("No RPi package, simulating GPIO connected to fake HX711.")
     FAKE_HX711 = FakeHx711()
@@ -17,11 +17,11 @@ except ModuleNotFoundError:
 
     for x in range(100):
         FAKE_HX711.inject_float_samples([float(x)], m, c)
-    
+
     #FAKE_HX711.inject_raw_samples([2000] * 100)    # 0kg
     FAKE_HX711.inject_raw_samples([140900] * 100)  # 10kg
     FAKE_HX711.inject_raw_samples([696500] * 100)  # 50kg
-    
+
     GPIO = FakeGpio(FAKE_HX711)
 
 
@@ -140,7 +140,7 @@ class HX711:
                 return real_sample
 
             return self._filter.sample(real_sample)
-    
+
     def read_word(self, timeout_seconds=0.5):
         # Wait for and get the Read Lock, in case another thread is already
         # driving the HX711 serial interface.

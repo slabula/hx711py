@@ -614,6 +614,11 @@ It prints the same timestamp/weight/sample-rate lines as in HTTP mode. The
 `--unit` label is only for display; it is not sent over the wire. `--interval`
 is ignored in serial mode, and `--timeout` is used as the serial read timeout.
 
+Malformed lines are skipped rather than printed: this includes wrong field
+counts, non-numeric values, `nan`/`inf`, non-positive timestamps, and partial
+lines caused by a serial read timeout. The client also reopens the device if it
+disappears from the host.
+
 The HTTP server keeps running at the same time, so `example_client.py` also
 still works in its default HTTP mode. If you only want serial output and no
 network listener, use `--host 127.0.0.1` on the Pi to keep HTTP local.

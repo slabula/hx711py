@@ -10,7 +10,7 @@ class FakeGpio:
         self._fake_hx711 = fake_hx711
         self._input_pin = None
         self._output_pin = None
-    
+
     def setmode(self, value):
         assert value in [self.BCM, self.BOARD]
 
@@ -30,7 +30,7 @@ class FakeGpio:
             raise ValueError("output({}, {})!! Not setup as an output!".format(pin, value))
 
         self._fake_hx711.set_pd_sck(value)
-        
+
     def input(self, pin):
         if pin == self._input_pin:
             return self._fake_hx711.dout()
